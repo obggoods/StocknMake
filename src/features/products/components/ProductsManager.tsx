@@ -452,7 +452,23 @@ export default function ProductsManager() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault()
-                        a.saveCategoryOnly()
+                    
+                        const v = a.newCategory.trim()
+                        if (!v) return
+                    
+                        // 1) 새 카테고리 저장 시도 (중복이어도 upsert면 안전)
+                        void a.saveCategoryOnly()
+                    
+                        // 2) 선택 확정 + 닫기
+                        a.setCategoryTyped(false)
+                        a.setNewCategory(v)
+                        a.setCategoryOpen(false)
+                      }
+                    
+                      // ESC로 닫기 (UX)
+                      if (e.key === "Escape") {
+                        a.setCategoryTyped(false)
+                        a.setCategoryOpen(false)
                       }
                     }}
                   />
@@ -479,6 +495,12 @@ export default function ProductsManager() {
                               a.setCategoryTyped(false)
                               a.setNewCategory(c)
                               a.setCategoryOpen(false)
+                            
+                              // ✅ 선택 후 제품명 입력으로 이동
+                              requestAnimationFrame(() => {
+                                const el = document.getElementById("product-name-input") as HTMLInputElement | null
+                                el?.focus()
+                              })
                             }}
                             className="flex items-center justify-between"
                           >

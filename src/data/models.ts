@@ -16,17 +16,25 @@ export type Product = {
 };
 
 export type Store = {
-  id: Id;
-  name: string;
-  createdAt: number;
+  id: Id
+  name: string
+  createdAt: number
 
-  // ✅ 추가
-  commissionRate?: number | null;      // 수수료(%) 예: 25
-  memo?: string | null;                // 메모
-  targetQtyOverride?: number | null;   // 입점처별 목표 재고 override
-  contactName?: string | null;         // 담당자/메모용 연락처명
-  phone?: string | null;               // 전화번호
-  address?: string | null;             // 주소
+  commissionRate?: number | null
+  memo?: string | null
+  targetQtyOverride?: number | null
+  contactName?: string | null
+  phone?: string | null
+  address?: string | null
+
+  status?: "active" | "inactive" | null
+  channel?: "online" | "offline" | null
+  tags?: string[] | null
+
+  storeFee?: number | null
+  settlementCycle?: "monthly" | "weekly" | "biweekly" | "ad-hoc" | null
+  settlementDay?: number | null
+  settlementNote?: string | null
 };
 
 export type InventoryItem = {
@@ -45,6 +53,15 @@ export type Settlement = {
   updatedAt: number;
 };
 
+export type SettlementV2 = {
+  id: string
+  marketplace_id: string
+  period_month: string
+  gross_amount: number
+  net_amount: number
+  created_at: string
+}
+
 export type Plan = {
   id: Id;
   storeId: Id;
@@ -61,6 +78,7 @@ export type AppData = {
   inventory: InventoryItem[];
   storeProductStates: StoreProductState[];
   settlements: Settlement[];
+  settlementsV2: SettlementV2[];
   plans: Plan[];
   updatedAt: number;
 };

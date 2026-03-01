@@ -31,6 +31,13 @@ type DBStore = {
   contact_name: string | null
   phone: string | null
   address: string | null
+  store_status: string | null
+  channel: string | null
+  tags: string[] | null
+  store_fee: number | null
+  settlement_cycle: string | null
+  settlement_day: number | null
+  settlement_note: string | null
 }
 
 type DBInventory = {
@@ -126,11 +133,12 @@ export async function ensureStoreProductStatesSeedDB(input: {
   const userId = await requireUserId()
   if (input.storeIds.length === 0 || input.productIds.length === 0) return
 
-  // 1) 이미 존재하는 조합을 미리 제외 (불필요한 업서트 최소화)
   const { data: existing, error } = await supabase
-    .from("store_product_states")
-    .select("store_id,product_id")
-    .eq("user_id", userId)
+  .from("store_product_states")
+  .select("store_id,product_id")
+  .eq("user_id", userId)
+  .in("store_id", input.storeIds)
+  .in("product_id", input.productIds)
 
   if (error) throw error
 
@@ -185,12 +193,10 @@ export async function ensureStoreProductStatesSeedDB(input: {
         msg.includes("does not exist")
 
       if (looksLikeConflictSpecIssue) {
-        const retry = await supabase
-          .from("store_product_states")
-          .upsert(chunk, {
-            onConflict: "store_id,product_id",
-            ignoreDuplicates: true,
-          })
+        const retry = await supabase.from("store_product_states").upsert(chunk, {
+          onConflict: "user_id,store_id,product_id",
+          ignoreDuplicates: true,
+        })
         if (retry.error) throw retry.error
       } else {
         throw upErr
@@ -211,8 +217,8 @@ export async function loadDataFromDB(): Promise<AppData> {
     productsRes,
     storesRes,
     invRes,
-    spsRes,
     settlementsRes,
+    settlementsV2Res,
     settlementItemsRes,
   ] = await Promise.all([
     supabase
@@ -224,19 +230,16 @@ export async function loadDataFromDB(): Promise<AppData> {
     supabase
       .from("stores")
       .select(
-        "id,name,created_at,commission_rate,memo,target_qty_override,contact_name,phone,address"
+        "id,name,created_at,commission_rate,memo,target_qty_override,contact_name,phone,address," +
+          "store_status,channel,tags,store_fee,settlement_cycle,settlement_day,settlement_note"
       )
       .eq("user_id", userId)
-      .order("created_at"),
+      .order("created_at")
+      .returns<DBStore[]>(),
 
     supabase
       .from("inventory")
       .select("store_id,product_id,on_hand_qty,updated_at")
-      .eq("user_id", userId),
-
-    supabase
-      .from("store_product_states")
-      .select("store_id,product_id,enabled")
       .eq("user_id", userId),
 
     // legacy settlements
@@ -246,6 +249,14 @@ export async function loadDataFromDB(): Promise<AppData> {
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
 
+    // settlements v2 (new engine header list)
+    supabase
+      .from("settlements_v2")
+      .select("id, marketplace_id, period_month, gross_amount, net_amount, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false }),
+
+    // legacy settlement items
     supabase
       .from("settlement_items")
       .select("settlement_id,product_id,sold_qty,unit_price,currency,created_at")
@@ -256,18 +267,20 @@ export async function loadDataFromDB(): Promise<AppData> {
     productsRes.error ||
     storesRes.error ||
     invRes.error ||
-    spsRes.error ||
     settlementsRes.error ||
+    settlementsV2Res.error ||
     settlementItemsRes.error
 
   if (err) throw err
 
   const products = (productsRes.data ?? []) as DBProduct[]
-  const stores = (storesRes.data ?? []) as DBStore[]
+  const stores = storesRes.data ?? []
   const inventory = (invRes.data ?? []) as DBInventory[]
   const settlements = (settlementsRes.data ?? []) as DBLegacySettlement[]
+  const settlementsV2 = (settlementsV2Res.data ?? []) as any[]
   const settlementItems = (settlementItemsRes.data ?? []) as DBLegacySettlementItem[]
 
+  // legacy: settlement_id -> items
   const itemsBySettlementId = new Map<string, DBLegacySettlementItem[]>()
   for (const it of settlementItems) {
     const sid = it.settlement_id
@@ -276,21 +289,33 @@ export async function loadDataFromDB(): Promise<AppData> {
     itemsBySettlementId.set(sid, arr)
   }
 
-  // seed 보장
+  // seed 보장 (store/product 조합이 실제로 비어있을 수 있으므로)
   await ensureStoreProductStatesSeedDB({
     storeIds: stores.map((s) => s.id),
     productIds: products.map((p) => p.id),
   })
 
-  const { data: sps2, error: spsErr2 } = await supabase
+  // store_product_states는 최종 1회만 읽음
+  const { data: sps, error: spsErr } = await supabase
     .from("store_product_states")
     .select("store_id,product_id,enabled")
     .eq("user_id", userId)
 
-  if (spsErr2) throw spsErr2
+  if (spsErr) throw spsErr
 
   return {
     ...createEmptyData(),
+
+    // ✅ v2는 최상단에 별도 보관 (legacy settlements 안에 넣지 말 것)
+    settlementsV2: (settlementsV2 ?? []).map((s) => ({
+      id: s.id,
+      marketplace_id: s.marketplace_id,
+      period_month: s.period_month,
+      gross_amount: s.gross_amount ?? 0,
+      net_amount: s.net_amount ?? 0,
+      created_at: s.created_at,
+    })),
+
     products: products.map((p) => ({
       id: p.id,
       name: p.name,
@@ -302,6 +327,7 @@ export async function loadDataFromDB(): Promise<AppData> {
       sku: p.sku ?? null,
       barcode: p.barcode ?? null,
     })),
+
     stores: stores.map((s) => ({
       id: s.id,
       name: s.name,
@@ -313,18 +339,33 @@ export async function loadDataFromDB(): Promise<AppData> {
       contactName: s.contact_name ?? null,
       phone: s.phone ?? null,
       address: s.address ?? null,
+
+      // ✅ 신규 운영 필드
+      status: (s.store_status as any) ?? "active",
+      channel: (s.channel as any) ?? "offline",
+      tags: s.tags ?? [],
+
+      // ✅ 비용/정산 운영
+      storeFee: s.store_fee ?? null,
+      settlementCycle: (s.settlement_cycle as any) ?? null,
+      settlementDay: s.settlement_day ?? null,
+      settlementNote: s.settlement_note ?? null,
     })),
+
     inventory: inventory.map((i) => ({
       storeId: i.store_id,
       productId: i.product_id,
       onHandQty: i.on_hand_qty ?? 0,
       updatedAt: new Date(i.updated_at).getTime(),
     })),
-    storeProductStates: (sps2 ?? []).map((x: any) => ({
+
+    storeProductStates: (sps ?? []).map((x: any) => ({
       storeId: x.store_id,
       productId: x.product_id,
       enabled: x.enabled ?? true,
     })),
+
+    // legacy settlements 유지
     settlements: settlements.map((s) => ({
       id: s.id,
       storeId: s.store_id,
@@ -338,9 +379,11 @@ export async function loadDataFromDB(): Promise<AppData> {
       createdAt: new Date(s.created_at).getTime(),
       updatedAt: new Date(s.updated_at).getTime(),
     })),
+
     updatedAt: Date.now(),
   }
 }
+
 export async function getSettlementV2ByMarketplaceMonthDB(input: {
   marketplaceId: string
   periodMonth: string // "YYYY-MM"
@@ -349,7 +392,7 @@ export async function getSettlementV2ByMarketplaceMonthDB(input: {
 
   const { data, error } = await supabase
     .from("settlements_v2")
-    .select("*")
+    .select("id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,source_filename,created_at,updated_at")
     .eq("user_id", userId)
     .eq("marketplace_id", input.marketplaceId)
     .eq("period_month", input.periodMonth)
@@ -449,6 +492,38 @@ export async function upsertInventoryItemDB(input: {
   if (error) throw error
 }
 
+// src/data/store.supabase.ts
+
+export async function upsertInventoryItemsBatchDB(input: Array<{
+  storeId: string
+  productId: string
+  onHandQty: number
+}>): Promise<void> {
+  if (!input.length) return
+
+  // ✅ user_id는 1번만 가져와서 모든 row에 적용
+  const userId = await requireUserId()
+
+  // ✅ 너무 큰 배열은 요청 실패할 수 있으니 chunk로 쪼갬
+  const CHUNK = 200
+  for (let i = 0; i < input.length; i += CHUNK) {
+    const chunk = input.slice(i, i + CHUNK)
+
+    const payload = chunk.map((x) => ({
+      user_id: userId,
+      store_id: x.storeId,
+      product_id: x.productId,
+      on_hand_qty: x.onHandQty,
+    }))
+
+    const { error } = await supabase
+      .from("inventory")
+      .upsert(payload, { onConflict: "user_id,store_id,product_id" })
+
+    if (error) throw error
+  }
+}
+
 export async function setStoreProductEnabledDB(input: {
   storeId: string
   productId: string
@@ -543,6 +618,15 @@ export async function createStoreDB(s: Store): Promise<void> {
       contact_name: (s as any).contactName ?? null,
       phone: (s as any).phone ?? null,
       address: (s as any).address ?? null,
+
+      store_status: (s as any).status ?? "active",
+      channel: (s as any).channel ?? "offline",
+      tags: (s as any).tags ?? [],
+
+      store_fee: (s as any).storeFee ?? null,
+      settlement_cycle: (s as any).settlementCycle ?? null,
+      settlement_day: (s as any).settlementDay ?? null,
+      settlement_note: (s as any).settlementNote ?? null,
     },
     { onConflict: "user_id,id" }
   )
@@ -575,9 +659,33 @@ export async function updateStoreDB(s: Store): Promise<void> {
       contact_name: (s as any).contactName ?? null,
       phone: (s as any).phone ?? null,
       address: (s as any).address ?? null,
+
+      store_status: (s as any).status ?? "active",
+      channel: (s as any).channel ?? "offline",
+      tags: (s as any).tags ?? [],
+
+      store_fee: (s as any).storeFee ?? null,
+      settlement_cycle: (s as any).settlementCycle ?? null,
+      settlement_day: (s as any).settlementDay ?? null,
+      settlement_note: (s as any).settlementNote ?? null,
     },
     { onConflict: "user_id,id" }
   )
+
+  if (error) throw error
+}
+
+export async function updateProductCategoryDB(input: {
+  productId: string
+  category: string | null
+}): Promise<void> {
+  const userId = await requireUserId()
+
+  const { error } = await supabase
+    .from("products")
+    .update({ category: input.category })
+    .eq("user_id", userId)
+    .eq("id", input.productId)
 
   if (error) throw error
 }
@@ -778,11 +886,12 @@ export async function deleteSettlementV2DB(input: { settlementId: string }) {
   }
 }
 
-
-export async function restoreInventoryFromSettlementV2DB(input: { settlementId: string }): Promise<void> {
+export async function restoreInventoryFromSettlementV2DB(input: {
+  settlementId: string
+}): Promise<void> {
   const userId = await requireUserId()
 
-  // settlement + lines 로드
+  // 1) settlement 로드
   const { data: settlement, error: sErr } = await supabase
     .from("settlements_v2")
     .select("id,user_id,marketplace_id,apply_to_inventory")
@@ -794,6 +903,7 @@ export async function restoreInventoryFromSettlementV2DB(input: { settlementId: 
   // 적용 안 된 정산이면 복원하지 않음
   if (!settlement.apply_to_inventory) return
 
+  // 2) lines 로드
   const { data: lines, error: lErr } = await supabase
     .from("settlement_lines_v2")
     .select("product_id,qty_sold")
@@ -801,40 +911,52 @@ export async function restoreInventoryFromSettlementV2DB(input: { settlementId: 
     .eq("settlement_id", input.settlementId)
   if (lErr) throw lErr
 
-  const storeId = settlement.marketplace_id as string
+  const storeId = String(settlement.marketplace_id ?? "")
+  if (!storeId) return
 
-  // product_id별 qty 합산
+  // 3) product_id별 qty 합산
   const agg = new Map<string, number>()
   for (const l of lines ?? []) {
     const pid = String(l.product_id ?? "")
     if (!pid) continue
     const q = Number(l.qty_sold ?? 0)
+    if (!Number.isFinite(q) || q === 0) continue
     agg.set(pid, (agg.get(pid) ?? 0) + q)
   }
 
-  // inventory 현재값 읽고 +qty 해서 upsert (복원)
-  await Promise.all(
-    Array.from(agg.entries()).map(async ([productId, restoreQty]) => {
-      const { data: inv, error: invErr } = await supabase
-        .from("inventory")
-        .select("on_hand_qty")
-        .eq("user_id", userId)
-        .eq("store_id", storeId)
-        .eq("product_id", productId)
-        .maybeSingle()
+  if (agg.size === 0) return
 
-      if (invErr) throw invErr
+  const productIds = Array.from(agg.keys())
 
-      const current = Number(inv?.on_hand_qty ?? 0)
-      const nextQty = current + restoreQty
+  // 4) inventory 현재값을 한 번에 조회 (IN)
+  const { data: invRows, error: invErr } = await supabase
+    .from("inventory")
+    .select("product_id,on_hand_qty")
+    .eq("user_id", userId)
+    .eq("store_id", storeId)
+    .in("product_id", productIds)
 
-      await upsertInventoryItemDB({
-        storeId,
-        productId,
-        onHandQty: nextQty,
-      })
-    })
+  if (invErr) throw invErr
+
+  const currentByPid = new Map<string, number>(
+    (invRows ?? []).map((r: any) => [
+      String(r.product_id),
+      Number(r.on_hand_qty ?? 0),
+    ])
   )
+
+  // 5) 계산 후 배치 업서트
+  const payload = productIds.map((pid) => {
+    const current = currentByPid.get(pid) ?? 0
+    const restoreQty = agg.get(pid) ?? 0
+    return {
+      storeId,
+      productId: pid,
+      onHandQty: current + restoreQty,
+    }
+  })
+
+  await upsertInventoryItemsBatchDB(payload)
 }
 
 export async function upsertSettlementHeaderDB(input: {

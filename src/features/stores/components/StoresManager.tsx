@@ -1,7 +1,7 @@
 // src/features/stores/components/StoresManager.tsx
 import { useCallback, useMemo, useState } from "react"
-import type { Product, Store } from "@/data/models"
-
+import type { Product } from "@/data/models"
+import { StoreDetailDialog } from "@/features/stores/components/StoreDetailDialog"
 import { useAppData } from "@/features/core/useAppData"
 import { toast } from "@/lib/toast"
 
@@ -26,20 +26,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react"
+import { Trash2 } from "lucide-react"
 
-function toNumOrNull(v: string) {
-  const t = (v ?? "").trim()
-  if (!t) return null
-  const n = Number(t)
-  if (!Number.isFinite(n)) return null
-  return Math.max(0, Math.round(n))
+function statusLabel(v?: any) {
+  return v === "inactive" ? "퇴점" : "입점중"
+}
+function channelLabel(v?: any) {
+  return v === "online" ? "온라인" : "오프라인"
 }
 
 export default function StoresManager() {
@@ -64,15 +57,49 @@ export default function StoresManager() {
   // ✅ 모달(입점처 추가)
   const [addOpen, setAddOpen] = useState(false)
 
-  // ✅ 목록 편집 상태(행 인라인 편집 유지)
-  const [editingStoreId, setEditingStoreId] = useState<string>("")
-  const [editName, setEditName] = useState("")
-  const [editCommission, setEditCommission] = useState("")
-  const [editTargetQty, setEditTargetQty] = useState("")
-  const [editContactName, setEditContactName] = useState("")
-  const [editPhone, setEditPhone] = useState("")
-  const [editAddress, setEditAddress] = useState("")
-  const [editMemo, setEditMemo] = useState("")
+  // ✅ 상세 모달
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailStoreId, setDetailStoreId] = useState<string>("")
+  const detailStore = useMemo(
+    () => stores.find((x) => x.id === detailStoreId) ?? null,
+    [stores, detailStoreId]
+  )
+
+  // ✅ 목록 필터
+  const [q, setQ] = useState("")
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all")
+  const [channelFilter, setChannelFilter] = useState<"all" | "online" | "offline">("all")
+  const [tagFilter, setTagFilter] = useState("")
+
+  const filteredStores = useMemo(() => {
+    const qq = q.trim().toLowerCase()
+    const tf = tagFilter.trim().toLowerCase()
+
+    return stores.filter((s) => {
+      if (qq) {
+        const hay = `${s.name ?? ""} ${(s.address ?? "")}`.toLowerCase()
+        if (!hay.includes(qq)) return false
+      }
+
+      if (statusFilter !== "all") {
+        const st = (s as any).status ?? "active"
+        if (st !== statusFilter) return false
+      }
+
+      if (channelFilter !== "all") {
+        const ch = (s as any).channel ?? "offline"
+        if (ch !== channelFilter) return false
+      }
+
+      if (tf) {
+        const tags = ((s as any).tags ?? []) as string[]
+        const hit = tags.some((t) => String(t ?? "").toLowerCase().includes(tf))
+        if (!hit) return false
+      }
+
+      return true
+    })
+  }, [stores, q, statusFilter, channelFilter, tagFilter])
 
   const isEnabledInStore = useCallback(
     (storeId: string, productId: string) => {
@@ -82,61 +109,14 @@ export default function StoresManager() {
     [a.data.storeProductStates]
   )
 
-  const startEditStore = useCallback((s: Store) => {
-    setEditingStoreId(s.id)
-    setEditName(s.name ?? "")
-    setEditCommission(s.commissionRate == null ? "" : String(s.commissionRate))
-    setEditTargetQty(s.targetQtyOverride == null ? "" : String(s.targetQtyOverride))
-    setEditContactName(s.contactName ?? "")
-    setEditPhone(s.phone ?? "")
-    setEditAddress(s.address ?? "")
-    setEditMemo(s.memo ?? "")
-  }, [])
-
-  const cancelEditStore = useCallback(() => {
-    setEditingStoreId("")
-    setEditName("")
-    setEditCommission("")
-    setEditTargetQty("")
-    setEditContactName("")
-    setEditPhone("")
-    setEditAddress("")
-    setEditMemo("")
-  }, [])
-
-  const saveEditStore = useCallback(async () => {
-    const id = editingStoreId
-    if (!id) return
-
-    const commissionRate = toNumOrNull(editCommission)
-    const targetQtyOverride = toNumOrNull(editTargetQty)
-
-    await a.saveStoreFields(id, {
-      name: editName,
-      commissionRate,
-      targetQtyOverride,
-      contactName: editContactName.trim() || null,
-      phone: editPhone.trim() || null,
-      address: editAddress.trim() || null,
-      memo: editMemo.trim() || null,
-    })
-
-    cancelEditStore()
-  }, [
-    a,
-    editingStoreId,
-    editName,
-    editCommission,
-    editTargetQty,
-    editContactName,
-    editPhone,
-    editAddress,
-    editMemo,
-    cancelEditStore,
-  ])
+  const onSaveStoreDetail = useCallback(
+    async (storeId: string, input: any) => {
+      await a.saveStoreFields(storeId, input)
+    },
+    [a]
+  )
 
   const onConfirmAddStore = useCallback(async () => {
-    // addStore는 내부에서 name 없으면 return 하므로 여기선 최소 UX만 보강
     if (!a.newStoreName.trim()) {
       toast.error("입점처명을 입력해 주세요.")
       return
@@ -154,73 +134,31 @@ export default function StoresManager() {
         <AppButton onClick={() => setAddOpen(true)}>입점처 추가</AppButton>
       </div>
 
-      {/* ✅ 입점처 추가 모달 */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen} modal={false}>
-        <DialogContent className="max-w-[720px]">
-          <DialogHeader>
-            <DialogTitle>입점처 추가</DialogTitle>
-            <DialogDescription>수수료/목표재고/연락처 정보를 함께 저장할 수 있습니다.</DialogDescription>
-          </DialogHeader>
+      {/* ✅ 상세 모달 */}
+      <StoreDetailDialog
+        open={detailOpen}
+        onOpenChange={(open) => {
+          setDetailOpen(open)
+          if (!open) setDetailStoreId("")
+        }}
+        store={detailStore}
+        busy={a.loading}
+        onSave={onSaveStoreDetail}
+        onRequestDelete={(id, name) => {
+          setDeleteStoreId(id)
+          setDeleteStoreName(name)
+        }}
+      />
 
-          <div className="space-y-3">
-            <div className="grid gap-2">
-              <AppInput
-                value={a.newStoreName}
-                onChange={(e) => a.setNewStoreName(e.target.value)}
-                placeholder="입점처명 예: 홍대 A소품샵"
-              />
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-3">
-              <AppInput
-                value={a.newStoreCommissionInput}
-                onChange={(e) => a.setNewStoreCommissionInput(e.target.value)}
-                placeholder="수수료(%) 예: 25"
-                inputMode="decimal"
-              />
-              <AppInput
-                value={a.newStoreTargetQtyInput}
-                onChange={(e) => a.setNewStoreTargetQtyInput(e.target.value)}
-                placeholder="목표재고 예: 10"
-                inputMode="numeric"
-              />
-              <AppInput
-                value={a.newStoreMemo}
-                onChange={(e) => a.setNewStoreMemo(e.target.value)}
-                placeholder="메모 (선택) 예: 월말 정산"
-              />
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-3">
-              <AppInput
-                value={a.newStoreContactName}
-                onChange={(e) => a.setNewStoreContactName(e.target.value)}
-                placeholder="담당자/연락처명 (선택)"
-              />
-              <AppInput
-                value={a.newStorePhone}
-                onChange={(e) => a.setNewStorePhone(e.target.value)}
-                placeholder="전화번호 (선택)"
-                inputMode="tel"
-              />
-              <AppInput
-                value={a.newStoreAddress}
-                onChange={(e) => a.setNewStoreAddress(e.target.value)}
-                placeholder="주소 (선택)"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <AppButton variant="secondary" onClick={() => setAddOpen(false)}>
-              취소
-            </AppButton>
-            <AppButton onClick={onConfirmAddStore} disabled={a.loading}>
-              추가
-            </AppButton>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ✅ 입점처 추가: StoreDetailDialog 재사용(create 모드) */}
+<StoreDetailDialog
+  mode="create"
+  open={addOpen}
+  onOpenChange={setAddOpen}
+  store={null}
+  busy={a.loading}
+  onCreate={a.createStoreWithFields}
+/>
 
       {/* 기존: 입점처별 취급 제품 ON/OFF */}
       <AppCard
@@ -358,147 +296,154 @@ export default function StoresManager() {
         )}
       </AppCard>
 
-      {/* ✅ 입점처 목록: 작업을 ... 메뉴로 */}
+      {/* ✅ 입점처 목록 + 필터 */}
       <AppCard density="compact" title="입점처 목록" className="min-w-0" contentClassName="space-y-3">
+        {/* 필터 바 */}
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <AppInput
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="검색: 입점처명/주소"
+            className="md:max-w-[260px]"
+          />
+          <AppSelect
+            value={statusFilter}
+            onValueChange={(v) => setStatusFilter(v as any)}
+            placeholder="상태"
+            options={[
+              { value: "all", label: "상태: 전체" },
+              { value: "active", label: "상태: 입점중" },
+              { value: "inactive", label: "상태: 퇴점" },
+            ]}
+            className="md:max-w-[200px]"
+          />
+          <AppSelect
+            value={channelFilter}
+            onValueChange={(v) => setChannelFilter(v as any)}
+            placeholder="채널"
+            options={[
+              { value: "all", label: "채널: 전체" },
+              { value: "offline", label: "채널: 오프라인" },
+              { value: "online", label: "채널: 온라인" },
+            ]}
+            className="md:max-w-[220px]"
+          />
+          <AppInput
+            value={tagFilter}
+            onChange={(e) => setTagFilter(e.target.value)}
+            placeholder="태그 필터 (부분 검색)"
+            className="md:max-w-[240px]"
+          />
+
+          <div className="md:ml-auto flex items-center gap-2">
+            <AppBadge variant="muted">표시 {filteredStores.length}개</AppBadge>
+            <AppButton
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setQ("")
+                setStatusFilter("all")
+                setChannelFilter("all")
+                setTagFilter("")
+              }}
+            >
+              필터 초기화
+            </AppButton>
+          </div>
+        </div>
+
         {a.loading ? (
           <div className="space-y-2">
             {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-10 w-full" />
             ))}
           </div>
-        ) : stores.length === 0 ? (
-          <EmptyState title="입점처가 없습니다" description="먼저 입점처를 추가하세요." />
+        ) : filteredStores.length === 0 ? (
+          <EmptyState title="결과가 없습니다" description="검색/필터 조건을 바꿔보세요." />
         ) : (
           <div className="overflow-x-auto rounded-xl border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="min-w-[220px]">입점처</TableHead>
+                  <TableHead className="min-w-[240px]">입점처</TableHead>
+                  <TableHead className="w-[110px]">상태</TableHead>
+                  <TableHead className="w-[120px]">온/오프라인</TableHead>
                   <TableHead className="w-[110px] text-right">수수료</TableHead>
-                  <TableHead className="w-[130px] text-right">목표재고</TableHead>
-                  <TableHead className="min-w-[200px]">담당자</TableHead>
-                  <TableHead className="min-w-[180px]">전화</TableHead>
-                  <TableHead className="min-w-[260px]">주소</TableHead>
-                  <TableHead className="min-w-[260px]">메모</TableHead>
-                  <TableHead className="w-[72px] text-right">작업</TableHead>
+                  <TableHead className="min-w-[240px]">태그</TableHead>
+                  <TableHead className="w-[160px] text-right">상세</TableHead>
                 </TableRow>
               </TableHeader>
 
               <TableBody>
-                {stores.map((s) => {
-                  const isEditing = editingStoreId === s.id
+                {filteredStores.map((s) => {
                   const enabledCount =
                     a.data.storeProductStates.filter((sp) => sp.storeId === s.id && sp.enabled).length
+                  const tags = ((s as any).tags ?? []) as string[]
+                  const showTags = tags.slice(0, 2)
+                  const more = tags.length - showTags.length
 
-                  if (!isEditing) {
-                    return (
-                      <TableRow key={s.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="text-sm font-medium truncate">{s.name}</div>
-                            <AppBadge variant="muted" className="shrink-0">
-                              {enabledCount}/{a.data.products.length}
-                            </AppBadge>
-                          </div>
-                        </TableCell>
-
-                        <TableCell className="text-right tabular-nums">
-                          {s.commissionRate == null ? "-" : `${s.commissionRate}%`}
-                        </TableCell>
-
-                        <TableCell className="text-right tabular-nums">
-                          {s.targetQtyOverride == null ? "-" : s.targetQtyOverride}
-                        </TableCell>
-
-                        <TableCell className="text-muted-foreground">{s.contactName ?? "-"}</TableCell>
-                        <TableCell className="text-muted-foreground">{s.phone ?? "-"}</TableCell>
-                        <TableCell className="text-muted-foreground">{s.address ?? "-"}</TableCell>
-                        <TableCell className="text-muted-foreground">{s.memo ?? "-"}</TableCell>
-
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                type="button"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border bg-background hover:bg-accent/30"
-                                aria-label="actions"
-                              >
-                                <MoreHorizontal className="h-4 w-4" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => startEditStore(s)}>
-                                <Pencil className="mr-2 h-4 w-4" />
-                                수정
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setDeleteStoreId(s.id)
-                                  setDeleteStoreName(s.name)
-                                }}
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                삭제
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  }
-
-                  // 편집 모드: 저장/취소는 버튼 유지(메뉴보다 명확)
                   return (
                     <TableRow key={s.id}>
                       <TableCell>
-                        <AppInput value={editName} onChange={(e) => setEditName(e.target.value)} />
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="text-sm font-medium truncate">{s.name}</div>
+                          <AppBadge variant="muted" className="shrink-0">
+                            {enabledCount}/{a.data.products.length}
+                          </AppBadge>
+                        </div>
+                        {s.address ? (
+                          <div className="mt-1 text-xs text-muted-foreground truncate">{s.address}</div>
+                        ) : null}
                       </TableCell>
 
                       <TableCell>
-                        <AppInput
-                          value={editCommission}
-                          onChange={(e) => setEditCommission(e.target.value)}
-                          placeholder="%"
-                          inputMode="decimal"
-                        />
+                        <AppBadge variant="muted">{statusLabel((s as any).status)}</AppBadge>
                       </TableCell>
 
                       <TableCell>
-                        <AppInput
-                          value={editTargetQty}
-                          onChange={(e) => setEditTargetQty(e.target.value)}
-                          placeholder="예: 10"
-                          inputMode="numeric"
-                        />
+                        <AppBadge variant="muted">{channelLabel((s as any).channel)}</AppBadge>
+                      </TableCell>
+
+                      <TableCell className="text-right tabular-nums">
+                        {s.commissionRate == null ? "-" : `${s.commissionRate}%`}
                       </TableCell>
 
                       <TableCell>
-                        <AppInput
-                          value={editContactName}
-                          onChange={(e) => setEditContactName(e.target.value)}
-                          placeholder="담당자"
-                        />
+                        <div className="flex flex-wrap gap-2">
+                          {showTags.map((t) => (
+                            <AppBadge key={t} variant="secondary">
+                              {t}
+                            </AppBadge>
+                          ))}
+                          {more > 0 && <AppBadge variant="muted">+{more}</AppBadge>}
+                          {tags.length === 0 && <span className="text-xs text-muted-foreground">-</span>}
+                        </div>
                       </TableCell>
 
-                      <TableCell>
-                        <AppInput value={editPhone} onChange={(e) => setEditPhone(e.target.value)} placeholder="전화" inputMode="tel" />
-                      </TableCell>
-
-                      <TableCell>
-                        <AppInput value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="주소" />
-                      </TableCell>
-
-                      <TableCell>
-                        <AppInput value={editMemo} onChange={(e) => setEditMemo(e.target.value)} placeholder="메모" />
-                      </TableCell>
-
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <AppButton type="button" size="sm" onClick={saveEditStore} disabled={a.loading}>
-                            저장
+                      <TableCell className="text-right">
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <AppButton
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setDetailStoreId(s.id)
+                              setDetailOpen(true)
+                            }}
+                          >
+                            상세
                           </AppButton>
-                          <AppButton type="button" size="sm" variant="secondary" onClick={cancelEditStore}>
-                            취소
+
+                          <AppButton
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setDeleteStoreId(s.id)
+                              setDeleteStoreName(s.name)
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </AppButton>
                         </div>
                       </TableCell>
@@ -535,6 +480,15 @@ export default function StoresManager() {
           if (!id) return
           try {
             await a.deleteStore(id)
+
+            // ✅ 삭제된 입점처가 선택돼 있었으면 해제
+            if (manageStoreId === id) setManageStoreId("")
+
+            // ✅ 상세 모달이 그 store를 보고 있었으면 닫기
+            if (detailStoreId === id) {
+              setDetailOpen(false)
+              setDetailStoreId("")
+            }
           } catch {
             toast.error("삭제에 실패했어요.")
           } finally {

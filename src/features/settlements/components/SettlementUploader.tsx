@@ -38,6 +38,7 @@ import {
   getSettlementV2ByMarketplaceMonthDB,
   listSettlementLinesV2DB,
   upsertInventoryItemDB,
+  upsertInventoryItemsBatchDB, // ✅ 추가
   getMarketplaceCommissionRateDB,
   replaceSettlementLinesDB,
   upsertSettlementHeaderDB,
@@ -385,6 +386,16 @@ export default function SettlementUploader() {
 
   // ✅ 파일 선택 → 텍스트 저장 + 헤더 추출 + 매핑 추정
   const onPickFile = useCallback(async (file: File) => {
+    // ✅ 업로드 파일 기본 검증 (운영 안전장치)
+  const MAX_BYTES = 5 * 1024 * 1024 // 5MB
+  if (file.size > MAX_BYTES) {
+    toast.error("CSV 파일이 너무 큽니다. 5MB 이하로 업로드해주세요.")
+    return
+  }
+  if (!file.name.toLowerCase().endsWith(".csv")) {
+    toast.error("CSV 파일(.csv)만 업로드할 수 있습니다.")
+    return
+  }
     try {
       const text = await file.text()
       const { headers } = parseCsvTextBasic(text)
@@ -458,6 +469,12 @@ export default function SettlementUploader() {
         return
       }
 
+      const MAX_ROWS = 5000
+if (parsed.length > MAX_ROWS) {
+  toast.error(`한 번에 ${MAX_ROWS.toLocaleString()}행 이하만 업로드할 수 있습니다.`)
+  return
+}
+
       buildPreview(parsed)
       toast.success("미리보기를 생성했어요. 적용 전 내용을 확인하세요.")
     } catch (e: any) {
@@ -479,29 +496,37 @@ export default function SettlementUploader() {
       toast.error("오류가 있는 행이 있어 적용할 수 없습니다. (삭제해서 제외할 수 있어요)")
       return
     }
-
+  
     const okRows = rows
       .filter((r) => !r.ignored)
       .filter((r) => r.status === "ok") as Array<Required<PreviewRow>>
-
-    const byStoreMonth = new Map<string, { storeId: string; month: string; storeName: string; rows: Required<PreviewRow>[] }>()
+  
+    const byStoreMonth = new Map<
+      string,
+      { storeId: string; month: string; storeName: string; rows: Required<PreviewRow>[] }
+    >()
+  
     for (const r of okRows) {
       const key = `${r.storeId}__${r.period}`
       const cur = byStoreMonth.get(key)
       if (!cur) byStoreMonth.set(key, { storeId: r.storeId, month: r.period, storeName: r.storeName, rows: [r] })
       else cur.rows.push(r)
     }
-
+  
     try {
       setBusy(true)
-
+  
+      // ✅ 재고 반영 확인은 apply 시작 시 1회만 (부분 적용/반복 confirm 방지)
+      const shouldApplyInventory =
+        applyToInventory ? window.confirm("판매 수량을 재고에 반영하시겠습니까?") : false
+  
       for (const g of byStoreMonth.values()) {
         // === 1) old qty map ===
         const existing = await getSettlementV2ByMarketplaceMonthDB({
           marketplaceId: g.storeId,
           periodMonth: g.month,
         })
-
+  
         const oldQty = new Map<string, number>()
         if (existing?.id) {
           const oldLines = await listSettlementLinesV2DB({ settlementId: existing.id })
@@ -512,22 +537,32 @@ export default function SettlementUploader() {
             oldQty.set(pid, (oldQty.get(pid) ?? 0) + q)
           }
         }
-
+  
         // === 2) new lines aggregate ===
-        const agg = new Map<string, { productId: string; productName: string; soldQty: number; unitPrice: number; gross: number }>()
+        const agg = new Map<
+          string,
+          { productId: string; productName: string; soldQty: number; unitPrice: number; gross: number }
+        >()
+  
         for (const r of g.rows) {
           const k = r.productId
           const prev = agg.get(k)
           if (!prev) {
             const gross = r.soldQty * r.unitPrice
-            agg.set(k, { productId: r.productId, productName: r.productName ?? "", soldQty: r.soldQty, unitPrice: r.unitPrice, gross })
+            agg.set(k, {
+              productId: r.productId,
+              productName: r.productName ?? "",
+              soldQty: r.soldQty,
+              unitPrice: r.unitPrice,
+              gross,
+            })
           } else {
             prev.soldQty += r.soldQty
             prev.unitPrice = r.unitPrice
             prev.gross = prev.soldQty * prev.unitPrice
           }
         }
-
+  
         const lines = Array.from(agg.values()).map((x) => ({
           productId: x.productId,
           productNameRaw: x.productName || "(unknown)",
@@ -538,9 +573,9 @@ export default function SettlementUploader() {
           grossAmount: x.gross,
           matchStatus: "matched" as const,
         }))
-
+  
         const grossAmount = lines.reduce((sum, l) => sum + l.grossAmount, 0)
-
+  
         // === 3) commission rate ===
         let commissionRate = 0
         try {
@@ -553,10 +588,10 @@ export default function SettlementUploader() {
           const pct = Number(store?.commissionRate ?? 0) || 0
           commissionRate = pct / 100
         }
-
+  
         const commissionAmount = Math.round(grossAmount * commissionRate)
         const netAmount = grossAmount - commissionAmount
-
+  
         // === 4) header upsert + replace lines ===
         const settlement = await upsertSettlementHeaderDB({
           marketplaceId: g.storeId,
@@ -568,52 +603,47 @@ export default function SettlementUploader() {
           netAmount,
           rowsCount: lines.length,
           sourceFilename: lastFileName || null,
-          applyToInventory,
+          applyToInventory: shouldApplyInventory,
         })
-
+  
         await replaceSettlementLinesDB({
           settlementId: settlement.id,
           marketplaceId: g.storeId,
           lines,
         })
-
+  
         // === 5) delta inventory apply (optional) ===
-        if (applyToInventory) {
-          const ok = window.confirm("판매 수량을 재고에 반영하시겠습니까?")
-          if (!ok) return
+        if (shouldApplyInventory) {
           const newQty = new Map<string, number>()
           for (const l of lines) {
             const pid = String(l.productId ?? "")
             if (!pid) continue
             newQty.set(pid, (newQty.get(pid) ?? 0) + Number(l.qtySold ?? 0))
           }
-
+  
           const allPids = new Set<string>([...oldQty.keys(), ...newQty.keys()])
-          for (const pid of allPids) {
-            const oldQ = oldQty.get(pid) ?? 0
-            const newQ = newQty.get(pid) ?? 0
-            const delta = newQ - oldQ
-            if (delta === 0) continue
+          const updates: Array<{ storeId: string; productId: string; onHandQty: number }> = []
 
-            const inv = a.data.inventory.find((x: any) => x.storeId === g.storeId && x.productId === pid)
-            const current = Number(inv?.onHandQty ?? 0)
+for (const pid of allPids) {
+  const oldQ = oldQty.get(pid) ?? 0
+  const newQ = newQty.get(pid) ?? 0
+  const delta = newQ - oldQ
+  if (delta === 0) continue
 
-            const nextQty = delta > 0 ? Math.max(0, current - delta) : current + Math.abs(delta)
+  const inv = a.data.inventory.find((x: any) => x.storeId === g.storeId && x.productId === pid)
+  const current = Number(inv?.onHandQty ?? 0)
 
-            await upsertInventoryItemDB({
-              storeId: g.storeId,
-              productId: pid,
-              onHandQty: nextQty,
-            })
-          }
+  const nextQty = delta > 0 ? Math.max(0, current - delta) : current + Math.abs(delta)
+
+  updates.push({ storeId: g.storeId, productId: pid, onHandQty: nextQty })
+}
+
+// ✅ 여기서 한 번에 업서트 (chunk는 내부에서 처리)
+await upsertInventoryItemsBatchDB(updates)
         }
       }
-
-      toast.success(
-        applyToInventory
-          ? "정산 저장 + 재고 반영 완료"
-          : "정산 저장 완료 (재고 미반영)"
-      )
+  
+      toast.success(shouldApplyInventory ? "정산 저장 + 재고 반영 완료" : "정산 저장 완료 (재고 미반영)")
       setRows(null)
       setLastFileName("")
       setCsvText("")
@@ -636,7 +666,7 @@ export default function SettlementUploader() {
 
       <AppCard
         density="compact"
-        title="정산 CSV 업로드"
+        title="새 정산 추가"
         description="CSV 업로드 → 입점처/월 선택 → 컬럼 매핑(바코드/수량/금액) → 미리보기 → v2 정산 저장"
         action={
           <div className="flex flex-wrap items-center gap-2">

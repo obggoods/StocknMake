@@ -21,6 +21,7 @@ import {
   deleteCategoryDB,
   updateStoreDB,
   upsertProductsBulkDB,
+  updateProductCategoryDB
 } from "@/data/store.supabase"
 import {
   supabase,
@@ -76,6 +77,7 @@ const EMPTY: AppData = {
   inventory: [],
   storeProductStates: [],
   settlements: [],
+  settlementsV2: [],
   plans: [],
   updatedAt: Date.now(),
 }
@@ -179,6 +181,8 @@ async function withOneRetryOnFetch<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+
+
 export function useAppData() {
   const [data, setData] = useState<AppData>(EMPTY)
   const [loading, setLoading] = useState(true)
@@ -229,6 +233,8 @@ const [newStoreMemo, setNewStoreMemo] = useState<string>("")
   const [categoryTyped, setCategoryTyped] = useState(false)
   const [categoryOpen, setCategoryOpen] = useState(false)
   const [categories, setCategories] = useState<string[]>([])
+
+  
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>()
@@ -338,6 +344,75 @@ const refresh = useCallback(async () => {
     refresh()
   }, [refresh])
 
+  const saveCategoryOnly = useCallback(async () => {
+    const c = String(newCategory ?? "").trim()
+    if (!c) return
+  
+    try {
+      await upsertCategoryDB(c)
+  
+      // 로컬 목록도 즉시 갱신(중복 방지)
+      setCategories((prev) => {
+        if (prev.includes(c)) return prev
+        return [...prev, c]
+      })
+  
+      toast.success("카테고리를 저장했어요.")
+      await refresh()
+    } catch (e: any) {
+      console.error(e)
+      toast.error(`카테고리 저장 실패: ${e?.message ?? e}`)
+      await refresh()
+    }
+  }, [newCategory, refresh])
+
+  const deleteCategory = useCallback(
+    async (name: string) => {
+      const c = String(name ?? "").trim()
+      if (!c) return
+  
+      try {
+        setLoading(true)
+        await deleteCategoryDB(c)
+  
+        // ✅ 로컬 categories 상태 업데이트(있을 때만)
+        setCategories((prev) => prev.filter((x) => x !== c))
+  
+        toast.success("카테고리를 삭제했어요.")
+        await refresh()
+      } catch (e: any) {
+        console.error(e)
+        toast.error(`카테고리 삭제 실패: ${e?.message ?? e}`)
+        await refresh()
+      } finally {
+        setLoading(false)
+      }
+    },
+    [refresh]
+  )
+
+  const saveProductCategoryOnly = useCallback(
+  async (productId: string, category: string | null) => {
+    const pid = String(productId ?? "").trim()
+    if (!pid) return
+
+    try {
+      await updateProductCategoryDB({
+        productId: pid,
+        category: category ?? null,
+      })
+
+      toast.success("카테고리를 저장했어요.")
+      await refresh()
+    } catch (e: any) {
+      console.error(e)
+      toast.error(`카테고리 저장 실패: ${e?.message ?? e}`)
+      await refresh()
+    }
+  },
+  [refresh]
+)
+
   // ✅ 토글/대량변경 후 refresh를 "마지막 변경 2초 뒤 1번"만 실행
 const refreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -349,41 +424,61 @@ const scheduleRefresh = useCallback(() => {
   }, 2000)
 }, [refresh])
 
-  // ===== category =====
-  const saveCategoryOnly = useCallback(async () => {
-    const c = newCategory.trim()
-    if (!c) return
-    if (categoryOptions.includes(c)) {
-      setCategoryOpen(false)
+const createStoreWithFields = useCallback(
+  async (input: any) => {
+    const name = String(input?.name ?? "").trim()
+    if (!name) {
+      toast.error("입점처명은 비워둘 수 없어요.")
       return
     }
 
-    try {
-      await upsertCategoryDB(c)
-      toast.success("카테고리를 저장했어요.")
-      setNewCategory("")
-      setCategoryTyped(false)
-      setCategoryOpen(false)
-      await refresh()
-    } catch {
-      toast.error("카테고리 저장에 실패했어요.")
-    }
-  }, [newCategory, categoryOptions, refresh])
+    const id =
+      (globalThis.crypto as any)?.randomUUID?.() ??
+      `store_${Date.now()}_${Math.random().toString(16).slice(2)}`
 
-  const deleteCategory = useCallback(
-    async (c: string) => {
-      const name = (c ?? "").trim()
-      if (!name) return
-      try {
-        await deleteCategoryDB(name)
-        toast.success("카테고리를 삭제했어요.")
-        await refresh()
-      } catch {
-        toast.error("카테고리 삭제에 실패했어요.")
-      }
-    },
-    [refresh]
-  )
+    const now = Date.now()
+
+    const store = {
+      id,
+      name,
+      createdAt: now,
+
+      commissionRate: input.commissionRate ?? null,
+      targetQtyOverride: input.targetQtyOverride ?? null,
+      contactName: input.contactName ?? null,
+      phone: input.phone ?? null,
+      address: input.address ?? null,
+      memo: input.memo ?? null,
+
+      status: input.status ?? "active",
+      channel: input.channel ?? "offline",
+      tags: input.tags ?? [],
+
+      storeFee: input.storeFee ?? null,
+      settlementCycle: input.settlementCycle ?? null,
+      settlementDay: input.settlementDay ?? null,
+      settlementNote: input.settlementNote ?? null,
+    } as any
+
+    try {
+      // loading은 프로젝트마다 setLoading이 없을 수 있으니, 있는 경우만 사용
+      // @ts-ignore
+      if (typeof setLoading === "function") setLoading(true)
+
+      await createStoreDB(store)
+      toast.success("입점처를 추가했어요.")
+      await refresh()
+    } catch (e: any) {
+      console.error(e)
+      toast.error(`추가 실패: ${e?.message ?? e}`)
+      await refresh()
+    } finally {
+      // @ts-ignore
+      if (typeof setLoading === "function") setLoading(false)
+    }
+  },
+  [refresh]
+)
 
   // ===== products =====
   const addProduct = useCallback(async () => {
@@ -767,6 +862,15 @@ setNewStoreMemo("")
         phone: string | null
         address: string | null
         memo: string | null
+  
+        // ✅ 신규 운영/정산 필드(옵션: 기존 호출부 깨지지 않게 optional)
+        status?: "active" | "inactive" | null
+        channel?: "online" | "offline" | null
+        tags?: string[] | null
+        storeFee?: number | null
+        settlementCycle?: "monthly" | "weekly" | "biweekly" | "ad-hoc" | null
+        settlementDay?: number | null
+        settlementNote?: string | null
       }
     ) => {
       const hit = data.stores.find((s) => s.id === storeId)
@@ -778,6 +882,18 @@ setNewStoreMemo("")
         return
       }
   
+      // ✅ tags 정리(빈값 제거 + trim + 중복 제거)
+      const cleanedTags = Array.from(
+        new Set((input.tags ?? (hit as any).tags ?? []).map((t: string) => t.trim()).filter(Boolean))
+      )
+  
+      // ✅ settlementDay 검증 (1~31만 허용, 아니면 null)
+      const sdRaw = input.settlementDay
+      const settlementDay =
+        sdRaw == null ? ((hit as any).settlementDay ?? null) : Number.isFinite(sdRaw) ? sdRaw : null
+      const safeSettlementDay =
+        settlementDay == null ? null : settlementDay >= 1 && settlementDay <= 31 ? settlementDay : null
+  
       const next = {
         ...hit,
         name: nextName,
@@ -787,6 +903,16 @@ setNewStoreMemo("")
         phone: input.phone ?? null,
         address: input.address ?? null,
         memo: input.memo ?? null,
+  
+        // ✅ 신규 필드: undefined면 기존값 유지
+        status: input.status ?? (hit as any).status ?? "active",
+        channel: input.channel ?? (hit as any).channel ?? "offline",
+        tags: cleanedTags,
+  
+        storeFee: input.storeFee ?? (hit as any).storeFee ?? null,
+        settlementCycle: input.settlementCycle ?? (hit as any).settlementCycle ?? null,
+        settlementDay: safeSettlementDay,
+        settlementNote: input.settlementNote ?? (hit as any).settlementNote ?? null,
       }
   
       const prevStores = data.stores
@@ -809,7 +935,7 @@ setNewStoreMemo("")
       }
     },
     [data.stores, refresh]
-  )  
+  )
 
   // ===== CSV products upload =====
 const isProvidedCsvValue = (v: any) =>
@@ -1093,6 +1219,7 @@ const cancelProductCsvConflict = useCallback(() => {
         inventory: parsed.inventory ?? [],
         storeProductStates: parsed.storeProductStates ?? [],
         settlements: parsed.settlements ?? [],
+        settlementsV2: parsed.settlementsV2 ?? [], // ✅ 추가
         plans: parsed.plans ?? [],
         updatedAt: Date.now(),
       }
@@ -1165,9 +1292,9 @@ const cancelProductCsvConflict = useCallback(() => {
     setCategoryTyped,
     categoryOpen,
     setCategoryOpen,
-    isExistingCategory,
-    saveCategoryOnly,
     deleteCategory,
+    saveCategoryOnly,
+    saveProductCategoryOnly,
 
     // products
     newProductName,
@@ -1198,6 +1325,7 @@ const cancelProductCsvConflict = useCallback(() => {
     setNewStoreCommissionInput,
     newStoreMemo,
     setNewStoreMemo,
+    createStoreWithFields,
 
     // csv
     csvInputRef,

@@ -16,6 +16,7 @@ const SettlementsPage = lazy(() => import("./features/settlements/pages/Settleme
 const AdminInvitesPage = lazy(() => import("./pages_legacy/AdminInvites"))
 const LoginPage = lazy(() => import("./pages_legacy/Login"))
 const InviteGatePage = lazy(() => import("./pages_legacy/InviteGate"))
+const InventoryPage = lazy(() => import("./features/inventory/pages/InventoryPage"))
 
 import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient"
 
@@ -156,6 +157,7 @@ export default function App() {
         >
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/stores" element={<StoresPage />} />
           <Route path="/settings" element={<SettingsPage />} />

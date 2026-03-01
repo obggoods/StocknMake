@@ -109,9 +109,10 @@ export async function listMyMarginProducts() {
   const user = authData.user
   if (!user) throw new Error("No authenticated user")
 
-  const { data, error } = await supabase
+    const { data, error } = await supabase
     .from("margin_products")
     .select("id,user_id,name,memo,data,created_at,updated_at")
+    .eq("user_id", user.id)
     .order("updated_at", { ascending: false })
 
   if (error) throw error
@@ -171,6 +172,7 @@ export async function listMyMaterialLibrary() {
   const { data, error } = await supabase
     .from("material_library")
     .select("id,user_id,name,unit_price,created_at,updated_at")
+    .eq("user_id", user.id)
     .order("updated_at", { ascending: false })
 
   if (error) throw error

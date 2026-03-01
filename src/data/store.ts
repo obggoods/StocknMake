@@ -15,6 +15,7 @@ export function createEmptyData(): AppData {
       inventory: [],
       storeProductStates: [], // ✅ 반드시 추가
       settlements: [],
+      settlementsV2: [],
       plans: [],
       updatedAt: Date.now(),
     };
