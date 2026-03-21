@@ -503,10 +503,9 @@ export async function upsertInventoryItemsBatchDB(input: Array<{
 }>): Promise<void> {
   if (!input.length) return
 
-  // ✅ user_id는 1번만 가져와서 모든 row에 적용
   const userId = await requireUserId()
+  const now = new Date().toISOString()
 
-  // ✅ 너무 큰 배열은 요청 실패할 수 있으니 chunk로 쪼갬
   const CHUNK = 200
   for (let i = 0; i < input.length; i += CHUNK) {
     const chunk = input.slice(i, i + CHUNK)
@@ -515,7 +514,8 @@ export async function upsertInventoryItemsBatchDB(input: Array<{
       user_id: userId,
       store_id: x.storeId,
       product_id: x.productId,
-      on_hand_qty: x.onHandQty,
+      on_hand_qty: Math.max(0, Math.floor(Number(x.onHandQty) || 0)),
+      updated_at: now,
     }))
 
     const { error } = await supabase
@@ -571,6 +571,8 @@ export async function setStoreProductsEnabledBulkDB(input: {
 
   if (error) throw error
 }
+
+
 
 /* =========================
    Product / Store CRUD
