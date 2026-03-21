@@ -231,9 +231,18 @@ export default function SettlementUploader() {
   const [busy, setBusy] = useState(false)
   const [rows, setRows] = useState<PreviewRow[] | null>(null)
   const [lastFileName, setLastFileName] = useState<string>("")
-
+  const [summaryCommissionRate, setSummaryCommissionRate] = useState("")
   const [applyToInventory, setApplyToInventory] = useState<boolean>(true)
 
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [summaryStoreId, setSummaryStoreId] = useState("")
+  const [summaryMonth, setSummaryMonth] = useState(() => {
+    const d = new Date()
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    return `${y}-${m}`
+  })
+  const [summaryGrossAmount, setSummaryGrossAmount] = useState("")
   // ✅ 매핑 UI용 상태
   const [csvText, setCsvText] = useState<string>("")
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
@@ -483,6 +492,81 @@ if (parsed.length > MAX_ROWS) {
     }
   }, [canBuildPreview, csvText, mapping, buildPreview, a.data.stores, selectedStoreId, selectedMonth])
 
+  async function saveSummarySettlement() {
+    try {
+      if (busy) return
+  
+      if (!summaryStoreId) {
+        toast.error("입점처를 선택해줘")
+        return
+      }
+  
+      if (!summaryMonth) {
+        toast.error("정산 월을 선택해줘")
+        return
+      }
+  
+      const grossAmount = Number(String(summaryGrossAmount).replaceAll(",", "").trim())
+  
+      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
+        toast.error("판매총액을 올바르게 입력해줘")
+        return
+      }
+  
+      if (grossAmount > 1000000000000) {
+        toast.error("판매총액이 너무 커. 값을 다시 확인해줘")
+        return
+      }
+  
+      const commissionRatePercent = Number(
+        String(summaryCommissionRate).replaceAll(",", "").trim()
+      )
+  
+      if (!Number.isFinite(commissionRatePercent) || commissionRatePercent < 0 || commissionRatePercent > 100) {
+        toast.error("수수료율은 0~100 사이로 입력해줘")
+        return
+      }
+  
+      const commissionRate = commissionRatePercent / 100
+      const commissionAmount = Math.round(grossAmount * commissionRate)
+      const netAmount = grossAmount - commissionAmount
+  
+      const saved = await upsertSettlementHeaderDB({
+        marketplaceId: summaryStoreId,
+        periodMonth: summaryMonth,
+        currency: "KRW",
+        grossAmount,
+        commissionRate,
+        commissionAmount,
+        netAmount,
+        rowsCount: 0,
+        sourceFilename: null,
+        applyToInventory: false,
+        settlementType: "summary",
+      })
+  
+      await replaceSettlementLinesDB({
+        settlementId: saved.id,
+        marketplaceId: summaryStoreId,
+        lines: [],
+      })
+  
+      setSummaryOpen(false)
+      setSummaryStoreId("")
+      setSummaryGrossAmount("")
+      setSummaryCommissionRate("")
+  
+      if (typeof (a as any).refresh === "function") {
+        await (a as any).refresh()
+      }
+  
+      toast.success("판매총액 정산이 저장됐어")
+    } catch (error: any) {
+      console.error(error)
+      toast.error(error?.message ?? "판매총액 정산 저장 중 오류가 발생했어")
+    }
+  }
+
   /**
    * ✅ v2 저장
    * - 헤더 upsert
@@ -683,6 +767,15 @@ await upsertInventoryItemsBatchDB(updates)
               CSV 업로드
             </AppButton>
 
+            <AppButton
+  type="button"
+  variant="outline"
+  onClick={() => setSummaryOpen((v) => !v)}
+  disabled={a.loading || busy}
+>
+  판매총액만 입력
+</AppButton>
+
             <input
               ref={inputRef}
               type="file"
@@ -694,6 +787,117 @@ await upsertInventoryItemsBatchDB(updates)
         }
         contentClassName="px-4 pb-4"
       >
+        {summaryOpen ? (
+  <div className="mt-4 space-y-3">
+    <div className="rounded-xl border p-4 space-y-3">
+      <div className="text-sm font-medium">판매총액만 입력</div>
+      <div className="text-xs text-muted-foreground">
+        제품별 판매수량 없이, 월별 판매총액만 정산으로 저장합니다.
+        재고는 반영되지 않아요.
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <label className="grid gap-1">
+          <span className="text-xs text-muted-foreground">
+            입점처 <span className="text-destructive"> *</span>
+          </span>
+          <select
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            value={summaryStoreId}
+            onChange={(e) => setSummaryStoreId(e.target.value)}
+          >
+            <option value="">선택</option>
+            {a.data.stores.map((s: any) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="grid gap-1">
+          <span className="text-xs text-muted-foreground">
+            월(YYYY.MM) <span className="text-destructive"> *</span>
+          </span>
+          <select
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            value={summaryMonth}
+            onChange={(e) => setSummaryMonth(e.target.value)}
+          >
+            {Array.from({ length: 24 }).map((_, i) => {
+              const d = new Date()
+              d.setMonth(d.getMonth() - i)
+              const y = d.getFullYear()
+              const m = String(d.getMonth() + 1).padStart(2, "0")
+              const value = `${y}-${m}`
+              const label = `${y}.${m}`
+              return (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              )
+            })}
+          </select>
+        </label>
+
+        <label className="grid gap-1">
+          <span className="text-xs text-muted-foreground">
+            판매총액(원) <span className="text-destructive"> *</span>
+          </span>
+          <AppInput
+            inputMode="numeric"
+            placeholder="예: 1250000"
+            value={summaryGrossAmount}
+            onChange={(e) => {
+              const onlyNumber = e.target.value.replace(/[^\d]/g, "")
+              setSummaryGrossAmount(onlyNumber)
+            }}
+          />
+        </label>
+      </div>
+
+      <label className="grid gap-1">
+  <span className="text-xs text-muted-foreground">
+    수수료율(%) <span className="text-destructive"> *</span>
+  </span>
+  <AppInput
+    inputMode="decimal"
+    placeholder="예: 30"
+    value={summaryCommissionRate}
+    onChange={(e) => {
+      const cleaned = e.target.value.replace(/[^\d.]/g, "")
+      setSummaryCommissionRate(cleaned)
+    }}
+  />
+</label>
+
+      <div className="flex flex-wrap justify-end gap-2">
+        <AppButton
+          type="button"
+          variant="outline"
+          onClick={() => {
+            setSummaryOpen(false)
+            setSummaryStoreId("")
+            setSummaryGrossAmount("")
+            setSummaryCommissionRate("")
+          }}
+          disabled={busy}
+        >
+          취소
+        </AppButton>
+
+        <AppButton
+          type="button"
+          onClick={saveSummarySettlement}
+          disabled={busy}
+        >
+          {busy ? "저장 중…" : "판매총액 정산 저장"}
+        </AppButton>
+      </div>
+    </div>
+  </div>
+) : null}
+
         {csvHeaders.length > 0 && !rows ? (
           <div className="mt-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
