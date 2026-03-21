@@ -2,7 +2,7 @@ name: DB Backup
 
 on:
   schedule:
-    - cron: "0 18 * * *" # 한국시간 새벽 3시
+    - cron: "0 18 * * *"
   workflow_dispatch:
 
 jobs:
@@ -17,14 +17,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Postgres 17 client
-  run: |
-    sudo apt-get update
-    sudo apt-get install -y wget gnupg
-    echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-    wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-    echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-    sudo apt-get update
-    sudo apt-get install -y postgresql-client-17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg ca-certificates lsb-release
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Check pg_dump version
+        run: pg_dump --version
 
       - name: Run pg_dump
         run: pg_dump "$DATABASE_URL" > backup.sql
