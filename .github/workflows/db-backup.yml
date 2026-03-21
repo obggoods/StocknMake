@@ -11,6 +11,8 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Checkout repo
@@ -36,3 +38,11 @@ jobs:
         with:
           name: db-backup
           path: backup.sql
+
+      - name: Upload to Supabase Storage
+        run: |
+          BACKUP_NAME="backup-$(date +%F-%H%M%S).sql"
+          curl -X POST "$SUPABASE_URL/storage/v1/object/backups/$BACKUP_NAME" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/sql" \
+            --data-binary "@backup.sql"
