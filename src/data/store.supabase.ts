@@ -91,6 +91,7 @@ type DBSettlement = {
   created_at: string
   updated_at: string
   apply_to_inventory: boolean
+  settlement_type?: "detailed" | "summary"
 }
 
 type DBSettlementLine = {
@@ -314,6 +315,7 @@ export async function loadDataFromDB(): Promise<AppData> {
       gross_amount: s.gross_amount ?? 0,
       net_amount: s.net_amount ?? 0,
       created_at: s.created_at,
+      settlement_type: s.settlement_type ?? "detailed",
     })),
 
     products: products.map((p) => ({
@@ -392,7 +394,7 @@ export async function getSettlementV2ByMarketplaceMonthDB(input: {
 
   const { data, error } = await supabase
     .from("settlements_v2")
-    .select("id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,source_filename,created_at,updated_at")
+    .select("id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,source_filename,created_at,updated_at,settlement_type")
     .eq("user_id", userId)
     .eq("marketplace_id", input.marketplaceId)
     .eq("period_month", input.periodMonth)
@@ -811,7 +813,7 @@ export async function listSettlementsDB(input: {
   let q = supabase
     .from("settlements_v2")
     .select(
-      "id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,source_filename,created_at,updated_at"
+      "id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,settlement_type,source_filename,created_at,updated_at"
     )    
     .eq("user_id", userId)
     .order("period_month", { ascending: false })
@@ -970,6 +972,7 @@ export async function upsertSettlementHeaderDB(input: {
   rowsCount: number
   sourceFilename?: string | null
   applyToInventory: boolean
+  settlementType?: "detailed" | "summary"
 }): Promise<DBSettlement> {
   const userId = await requireUserId()
 
@@ -986,11 +989,12 @@ export async function upsertSettlementHeaderDB(input: {
     status: "confirmed",
     apply_to_inventory: input.applyToInventory,
     source_filename: input.sourceFilename ?? null,
+    settlement_type: input.settlementType ?? "detailed",
   }
 
   const { data, error } = await supabase
     .from("settlements_v2")
-    .upsert(payload, { onConflict: "user_id,marketplace_id,period_month" })
+    .upsert(payload, { onConflict: "user_id,marketplace_id,period_month,settlement_type" })
     .select("*")
     .single()
 
