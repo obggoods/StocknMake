@@ -31,7 +31,13 @@ jobs:
         run: /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Run pg_dump
-        run: /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" > backup.sql
+        run: |
+    /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" \
+      --encoding=UTF8 \
+      --schema=public \
+      --no-owner \
+      --no-privileges \
+      > backup.sql
 
       - name: Upload backup artifact
         uses: actions/upload-artifact@v4
