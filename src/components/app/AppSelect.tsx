@@ -22,7 +22,7 @@ export function AppSelect(props: {
     <div className={cn("relative", className)}>
       <select
         className={cn(
-          "flex h-10 w-full appearance-none items-center rounded-md border border-input bg-background px-3 pr-10 text-sm",
+          "flex h-8 w-full appearance-none items-center rounded-md border border-input bg-background px-3 pr-10 text-sm",
           "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-50"
         )}

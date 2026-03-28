@@ -48,8 +48,9 @@ export default function Sidebar(props: {
   isAdmin: boolean
   mobileOpen: boolean
   onMobileClose: () => void
+  billingPlan?: "free" | "basic" | "premium"
 }) {
-  const { isAdmin, mobileOpen, onMobileClose } = props
+  const { isAdmin, mobileOpen, onMobileClose, billingPlan } = props
 
   const linkClass = (isActive: boolean) =>
     cx(
@@ -106,6 +107,25 @@ export default function Sidebar(props: {
             </div>
           )}
         </nav>
+        {billingPlan === "free" && (
+  <div className="p-3">
+    <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+      <div className="text-sm font-semibold text-foreground">
+        업그레이드하기
+      </div>
+
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        정산, CSV 업로드, 다운로드 기능을 사용해보세요.
+      </p>
+
+      <NavLink to="/pricing">
+        <button className="mt-3 w-full h-9 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-95 transition">
+          Basic 시작하기
+        </button>
+      </NavLink>
+    </div>
+  </div>
+)} 
       </aside>
 
       {/* 모바일 */}
@@ -175,6 +195,25 @@ export default function Sidebar(props: {
                 </div>
               )}
             </nav>
+            {billingPlan === "free" && (
+  <div className="mt-4 px-2">
+    <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+      <div className="text-sm font-semibold text-foreground">
+        업그레이드하기
+      </div>
+
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        정산, 일괄 업로드 등 고급 기능을 사용해보세요.
+      </p>
+
+      <NavLink to="/pricing" onClick={onMobileClose}>
+        <button className="mt-3 w-full h-9 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
+          Basic 시작하기
+        </button>
+      </NavLink>
+    </div>
+  </div>
+)}
           </div>
         </div>
       ) : null}

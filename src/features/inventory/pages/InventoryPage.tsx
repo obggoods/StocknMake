@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import * as XLSX from "xlsx"
 
 import PageHeader from "@/app/layout/PageHeader"
 import { useAppData } from "@/features/core/useAppData"
@@ -148,6 +147,15 @@ async function readCsvFileText(file: File) {
   }
 }
 
+let xlsxModulePromise: Promise<typeof import("xlsx")> | null = null
+
+async function getXlsx() {
+  if (!xlsxModulePromise) {
+    xlsxModulePromise = import("xlsx")
+  }
+  return xlsxModulePromise
+}
+
 async function readInventoryUploadRows(file: File) {
   const lowerName = String(file.name ?? "").toLowerCase()
 
@@ -170,27 +178,28 @@ async function readInventoryUploadRows(file: File) {
     })
   }
 
-  // XLSX / XLS
-  if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
-    const buffer = await file.arrayBuffer()
-    const workbook = XLSX.read(buffer, { type: "array" })
-
-    const firstSheetName = workbook.SheetNames[0]
-    if (!firstSheetName) return []
-
-    const sheet = workbook.Sheets[firstSheetName]
-    const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-      defval: "",
-    })
-
-    return jsonRows.map((row) => {
-      const normalized: Record<string, string> = {}
-      for (const [key, value] of Object.entries(row)) {
-        normalized[normalizeHeader(key)] = String(value ?? "").trim()
-      }
-      return normalized
-    })
-  }
+    // XLSX / XLS
+    if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+      const XLSX = await getXlsx()
+      const buffer = await file.arrayBuffer()
+      const workbook = XLSX.read(buffer, { type: "array" })
+  
+      const firstSheetName = workbook.SheetNames[0]
+      if (!firstSheetName) return []
+  
+      const sheet = workbook.Sheets[firstSheetName]
+      const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+        defval: "",
+      })
+  
+      return jsonRows.map((row) => {
+        const normalized: Record<string, string> = {}
+        for (const [key, value] of Object.entries(row)) {
+          normalized[normalizeHeader(key)] = String(value ?? "").trim()
+        }
+        return normalized
+      })
+    }
 
   throw new Error("지원하지 않는 파일 형식입니다.")
 }
@@ -647,8 +656,9 @@ export default function InventoryPage() {
   }, [])
 
   // ===== CSV Export =====
-  const exportInventoryWorkbook = useCallback(() => {
+  const exportInventoryWorkbook = useCallback(async () => {
     const today = new Date().toISOString().slice(0, 10)
+    const XLSX = await getXlsx()
     const workbook = XLSX.utils.book_new()
 
     const buildInventorySheetRows = (rows: any[]) => {
@@ -725,8 +735,9 @@ export default function InventoryPage() {
     productCategoryById,
   ])
 
-    const exportMakeWorkbook = useCallback(() => {
+    const exportMakeWorkbook = useCallback(async () => {
     const today = new Date().toISOString().slice(0, 10)
+    const XLSX = await getXlsx()
 
     const workbook = XLSX.utils.book_new()
 
@@ -793,7 +804,8 @@ XLSX.utils.book_append_sheet(workbook, sheet, safeSheetName(storeName))
     targetQty,
   ])
 
-  const downloadInventoryUploadTemplate = useCallback(() => {
+  const downloadInventoryUploadTemplate = useCallback(async () => {
+    const XLSX = await getXlsx()
     const workbook = XLSX.utils.book_new()
 
     // 1) 실제 입력용 시트
@@ -850,12 +862,13 @@ XLSX.utils.book_append_sheet(workbook, sheet, safeSheetName(storeName))
     XLSX.writeFile(workbook, "StocknMake_입점처재고업로드_템플릿.xlsx")
   }, [])
 
-  const downloadStoreSpecificInventoryTemplate = useCallback(() => {
+  const downloadStoreSpecificInventoryTemplate = useCallback(async () => {
     if (selectedStoreId === "__all__" || !selectedStoreName) {
       toast.error("입점처를 먼저 선택해 주세요.")
       return
     }
 
+    const XLSX = await getXlsx()
     const workbook = XLSX.utils.book_new()
 
     // 1) 실제 입력용 시트

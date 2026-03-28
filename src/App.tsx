@@ -2,7 +2,7 @@
 import { Suspense, lazy, useEffect, useState } from "react"
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
 import type { Session } from "@supabase/supabase-js"
-
+import Pricing from "@/pages_legacy/Pricing"
 import "./App.css"
 
 import AppLayout from "./app/layout/AppLayout"
@@ -18,7 +18,7 @@ const LoginPage = lazy(() => import("./pages_legacy/Login"))
 const InviteGatePage = lazy(() => import("./pages_legacy/InviteGate"))
 const InventoryPage = lazy(() => import("./features/inventory/pages/InventoryPage"))
 
-import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient"
+import { supabase, getOrCreateMyProfile, getMyBilling } from "./lib/supabaseClient"
 
 type MyProfile = {
   is_invited?: boolean
@@ -36,6 +36,10 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [adminChecked, setAdminChecked] = useState(false)
 
+  const [billingLoaded, setBillingLoaded] = useState(false)
+  const [billingPlan, setBillingPlan] = useState<"free" | "basic" | "premium">("free")
+  const [isPaidUser, setIsPaidUser] = useState(false)
+
   // ✅ 0) 세션 부트스트랩 + Auth 상태 변화 구독
   useEffect(() => {
     let alive = true
@@ -51,6 +55,9 @@ export default function App() {
       setProfile(null)
       setIsAdmin(false)
       setAdminChecked(false)
+      setBillingLoaded(false)
+      setBillingPlan("free")
+      setIsPaidUser(false)
     })
 
     return () => {
@@ -84,6 +91,42 @@ export default function App() {
       alive = false
     }
   }, [session])
+
+    // ✅ 1.5) 로그인 상태에서만 billing 로드
+    useEffect(() => {
+      let alive = true
+  
+      ;(async () => {
+        if (!session) {
+          if (!alive) return
+          setBillingPlan("free")
+          setIsPaidUser(false)
+          setBillingLoaded(true)
+          return
+        }
+  
+        try {
+          setBillingLoaded(false)
+          const billing = await getMyBilling()
+          if (!alive) return
+  
+          setBillingPlan(billing.plan_tier)
+          setIsPaidUser(billing.is_paid)
+        } catch (e) {
+          console.error("[App] billing load failed", e)
+          if (!alive) return
+  
+          setBillingPlan("free")
+          setIsPaidUser(false)
+        } finally {
+          if (alive) setBillingLoaded(true)
+        }
+      })()
+  
+      return () => {
+        alive = false
+      }
+    }, [session])
 
   // ✅ 2) 로그인 상태에서만 관리자 여부 체크
   useEffect(() => {
@@ -124,7 +167,7 @@ export default function App() {
   }  
 
   // ✅ 4) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
-  if (profileLoading || !profile || !adminChecked) {
+  if (profileLoading || !profile || !adminChecked || !billingLoaded) {
     return <div className="app-loading">초대 여부 확인 중…</div>
   }
 
@@ -140,19 +183,24 @@ export default function App() {
   }  
 
   // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
+
+console.log("[App billing]", { billingLoaded, billingPlan, isPaidUser })
+console.log("[Supabase URL]", import.meta.env.VITE_SUPABASE_URL)
+
   return (
     <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
       <Routes>
         <Route
           element={
             <AppLayout
-              sessionEmail={session.user.email ?? ""}
-              isAdmin={isAdmin}
-              onLogout={async () => {
-                await supabase.auth.signOut()
-                nav("/login")
-              }}
-            />
+  sessionEmail={session.user.email ?? ""}
+  isAdmin={isAdmin}
+  billingPlan={billingPlan}
+  onLogout={async () => {
+    await supabase.auth.signOut()
+    nav("/login")
+  }}
+/>
           }
         >
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -163,6 +211,7 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/margin" element={<MarginCalculatorPage />} />
           <Route path="/settlements" element={<SettlementsPage />} />
+          <Route path="/pricing" element={<Pricing />} />
           <Route
   path="/invite"
   element={

@@ -221,15 +221,14 @@ if (IS_MAINTENANCE) {
 ========================= */
 
 export async function loadDataFromDB(): Promise<AppData> {
+  console.time("[perf] loadDataFromDB")
   const userId = await requireUserId()
 
   const [
     productsRes,
     storesRes,
     invRes,
-    settlementsRes,
     settlementsV2Res,
-    settlementItemsRes,
   ] = await Promise.all([
     supabase
       .from("products")
@@ -252,13 +251,6 @@ export async function loadDataFromDB(): Promise<AppData> {
       .select("store_id,product_id,on_hand_qty,updated_at")
       .eq("user_id", userId),
 
-    // legacy settlements
-    supabase
-      .from("settlements")
-      .select("id,store_id,month,created_at,updated_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false }),
-
     // settlements v2 (new engine header list)
     supabase
       .from("settlements_v2")
@@ -266,38 +258,20 @@ export async function loadDataFromDB(): Promise<AppData> {
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
 
-    // legacy settlement items
-    supabase
-      .from("settlement_items")
-      .select("settlement_id,product_id,sold_qty,unit_price,currency,created_at")
-      .eq("user_id", userId),
   ])
 
   const err =
     productsRes.error ||
     storesRes.error ||
     invRes.error ||
-    settlementsRes.error ||
-    settlementsV2Res.error ||
-    settlementItemsRes.error
+    settlementsV2Res.error
 
   if (err) throw err
 
   const products = (productsRes.data ?? []) as DBProduct[]
   const stores = storesRes.data ?? []
   const inventory = (invRes.data ?? []) as DBInventory[]
-  const settlements = (settlementsRes.data ?? []) as DBLegacySettlement[]
   const settlementsV2 = (settlementsV2Res.data ?? []) as any[]
-  const settlementItems = (settlementItemsRes.data ?? []) as DBLegacySettlementItem[]
-
-  // legacy: settlement_id -> items
-  const itemsBySettlementId = new Map<string, DBLegacySettlementItem[]>()
-  for (const it of settlementItems) {
-    const sid = it.settlement_id
-    const arr = itemsBySettlementId.get(sid) ?? []
-    arr.push(it)
-    itemsBySettlementId.set(sid, arr)
-  }
 
   // seed 보장 (store/product 조합이 실제로 비어있을 수 있으므로)
   await ensureStoreProductStatesSeedDB({
@@ -312,7 +286,7 @@ export async function loadDataFromDB(): Promise<AppData> {
     .eq("user_id", userId)
 
   if (spsErr) throw spsErr
-
+  console.timeEnd("[perf] loadDataFromDB")
   return {
     ...createEmptyData(),
 
@@ -376,20 +350,8 @@ export async function loadDataFromDB(): Promise<AppData> {
       enabled: x.enabled ?? true,
     })),
 
-    // legacy settlements 유지
-    settlements: settlements.map((s) => ({
-      id: s.id,
-      storeId: s.store_id,
-      month: s.month,
-      items: (itemsBySettlementId.get(s.id) ?? []).map((it) => ({
-        productId: it.product_id,
-        soldQty: it.sold_qty ?? 0,
-        unitPrice: it.unit_price ?? 0,
-        currency: it.currency ?? "KRW",
-      })),
-      createdAt: new Date(s.created_at).getTime(),
-      updatedAt: new Date(s.updated_at).getTime(),
-    })),
+    // legacy settlements는 초기 전체 로딩에서 제외
+    settlements: [],
 
     updatedAt: Date.now(),
   }
@@ -418,12 +380,16 @@ export async function listSettlementLinesV2DB(input: {
 }) {
   const userId = await requireUserId()
 
+  console.time("[perf] settlement_lines_v2")
+
   const { data, error } = await supabase
     .from("settlement_lines_v2")
     .select("*")
     .eq("user_id", userId)
     .eq("settlement_id", input.settlementId)
     .order("gross_amount", { ascending: false })
+
+  console.timeEnd("[perf] settlement_lines_v2")
 
   if (error) throw error
   return (data ?? []) as any[]
@@ -642,9 +608,9 @@ export async function createProductDB(p: Product): Promise<void> {
     { onConflict: "user_id,id" }
   )
   if (error) throw error
-
+  console.time("[perf] stores")
   const { data: stores } = await supabase.from("stores").select("id").eq("user_id", userId)
-
+  console.timeEnd("[perf] stores")
   await ensureStoreProductStatesSeedDB({
     storeIds: (stores ?? []).map((s: any) => s.id),
     productIds: [p.id],
@@ -686,16 +652,18 @@ export async function createStoreDB(s: Store): Promise<void> {
     { onConflict: "user_id,id" }
   )
   if (error) throw error
-
+  console.time("[perf] products")
   const { data: products } = await supabase
     .from("products")
     .select("id")
     .eq("user_id", userId)
+  console.timeEnd("[perf] products")
 
   await ensureStoreProductStatesSeedDB({
     storeIds: [s.id],
     productIds: (products ?? []).map((p: any) => p.id),
   })
+  
 }
 
 export async function updateStoreDB(s: Store): Promise<void> {
@@ -933,12 +901,16 @@ export async function getSettlementDetailDB(input: {
 }): Promise<{ settlement: DBSettlement; lines: DBSettlementLine[] }> {
   const userId = await requireUserId()
 
+  console.time("[perf] settlements_v2")
+
   const { data: settlement, error: sErr } = await supabase
     .from("settlements_v2")
     .select("*")
     .eq("user_id", userId)
     .eq("id", input.settlementId)
     .single()
+
+    console.time("[perf] settlements_v2")
 
   if (sErr) throw sErr
 
@@ -1001,12 +973,18 @@ export async function restoreInventoryFromSettlementV2DB(input: {
   const userId = await requireUserId()
 
   // 1) settlement 로드
+
+  console.time("[perf] settlements_v2")
+  
   const { data: settlement, error: sErr } = await supabase
     .from("settlements_v2")
     .select("id,user_id,marketplace_id,apply_to_inventory")
     .eq("user_id", userId)
     .eq("id", input.settlementId)
     .single()
+
+  console.timeEnd("[perf] settlements_v2")
+
   if (sErr) throw sErr
 
   // 적용 안 된 정산이면 복원하지 않음
@@ -1038,6 +1016,8 @@ export async function restoreInventoryFromSettlementV2DB(input: {
   const productIds = Array.from(agg.keys())
 
   // 4) inventory 현재값을 한 번에 조회 (IN)
+  console.time("[perf] inventory")
+
   const { data: invRows, error: invErr } = await supabase
     .from("inventory")
     .select("product_id,on_hand_qty")
@@ -1045,6 +1025,8 @@ export async function restoreInventoryFromSettlementV2DB(input: {
     .eq("store_id", storeId)
     .in("product_id", productIds)
 
+  console.timeEnd("[perf] inventory")
+  
   if (invErr) throw invErr
 
   const currentByPid = new Map<string, number>(

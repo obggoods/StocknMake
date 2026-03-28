@@ -9,7 +9,6 @@ import type { AppData } from "@/data/models"
 import { downloadJson, generateId, readJsonFile } from "@/data/store"
 import {
   loadDataFromDB,
-  ensureStoreProductStatesSeedDB,
   setStoreProductEnabledDB,
   setStoreProductsEnabledBulkDB,
   createProductDB,
@@ -191,9 +190,6 @@ export function useAppData() {
   // ✅ refresh 중복 호출 방지
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const refreshQueuedRef = useRef(false)
-  
-// ✅ seed(스토어×제품 상태) 호출 최소화: store/product id 목록이 바뀔 때만 실행
-const seedKeyRef = useRef<string>("")
 
   // ✅ 유저별 설정
   const [defaultTargetQtyInput, setDefaultTargetQtyInput] = useState<string>("5")
@@ -282,6 +278,7 @@ useEffect(() => {
 }, [])
 
 const refresh = useCallback(async () => {
+  console.time("[perf] refresh")
   if (refreshInFlightRef.current) {
     refreshQueuedRef.current = true
     return refreshInFlightRef.current
@@ -300,20 +297,6 @@ const refresh = useCallback(async () => {
         const next = await loadDataFromDB()
         setData(next)
     
-        // ✅ seed는 store/product 조합이 바뀔 때만 실행
-        const storeIds = next.stores.map((s) => s.id).sort()
-        const productIds = next.products.map((p) => p.id).sort()
-        const nextSeedKey = `${storeIds.join(",")}||${productIds.join(",")}`
-    
-        if (nextSeedKey !== seedKeyRef.current) {
-          seedKeyRef.current = nextSeedKey
-    
-          await ensureStoreProductStatesSeedDB({
-            storeIds,
-            productIds,
-          })
-        }
-    
         const cats = await loadCategoriesDB()
         setCategories(cats)
       })
@@ -325,6 +308,8 @@ const refresh = useCallback(async () => {
           ? "네트워크 연결이 잠시 불안정해요. 잠시 후 다시 시도해 주세요."
           : msg
       )
+  console.timeEnd("[perf] refresh")
+  
     } finally {
       setLoading(false)
     }

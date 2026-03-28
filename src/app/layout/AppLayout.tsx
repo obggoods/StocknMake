@@ -8,9 +8,10 @@ import { Toaster } from "@/components/shared/Toaster"
 export default function AppLayout(props: {
   sessionEmail: string
   isAdmin: boolean
-  onLogout: () => Promise<void>
+  billingPlan?: "free" | "basic" | "premium"
+  onLogout: () => void
 }) {
-  const { sessionEmail, isAdmin, onLogout } = props
+  const { sessionEmail, isAdmin, billingPlan, onLogout } = props
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
@@ -21,6 +22,7 @@ export default function AppLayout(props: {
           isAdmin={isAdmin}
           mobileOpen={mobileSidebarOpen}
           onMobileClose={() => setMobileSidebarOpen(false)}
+          billingPlan={billingPlan}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">

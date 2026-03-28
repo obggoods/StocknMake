@@ -231,12 +231,14 @@ export default function SettlementsPage() {
           focusMarketplaceId={storeId || undefined}
         />
 
-        <TopProductsMiniCard
-          month={month}
-          storeId={storeId}
-          items={items}
-          storeNameById={storeNameById}
-        />
+{/* 
+<TopProductsMiniCard
+  month={month}
+  storeId={storeId}
+  items={items}
+  storeNameById={storeNameById}
+/>
+*/}
       </div>
 
       {/* 업로드 */}
