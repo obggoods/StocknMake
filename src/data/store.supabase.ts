@@ -4,7 +4,7 @@ import type { AppData, Product, Store } from "./models"
 import { createEmptyData } from "./store"
 
 // 🔒 전환용 유지보수 모드
-const IS_MAINTENANCE = true
+const IS_MAINTENANCE = false
 
 /* =========================
    DB Row Types
