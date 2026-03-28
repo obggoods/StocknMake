@@ -3,6 +3,9 @@ import { supabase } from "../lib/supabaseClient"
 import type { AppData, Product, Store } from "./models"
 import { createEmptyData } from "./store"
 
+// 🔒 전환용 유지보수 모드
+const IS_MAINTENANCE = true
+
 /* =========================
    DB Row Types
 ========================= */
@@ -131,6 +134,12 @@ export async function ensureStoreProductStatesSeedDB(input: {
   storeIds: string[]
   productIds: string[]
 }): Promise<void> {
+
+// 🔒 유지보수 모드 차단
+if (IS_MAINTENANCE) {
+  throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+}
+
   const userId = await requireUserId()
   if (input.storeIds.length === 0 || input.productIds.length === 0) return
 
@@ -438,6 +447,12 @@ export async function loadCategoriesDB(): Promise<string[]> {
 }
 
 export async function upsertCategoryDB(name: string): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
   const c = name.trim()
   if (!c) return
@@ -450,6 +465,12 @@ export async function upsertCategoryDB(name: string): Promise<void> {
 }
 
 export async function deleteCategoryDB(name: string): Promise<void> {
+
+// 🔒 유지보수 모드 차단
+if (IS_MAINTENANCE) {
+  throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+}
+
   const userId = await requireUserId()
   const c = name.trim()
   if (!c) return
@@ -478,6 +499,12 @@ export async function upsertInventoryItemDB(input: {
   productId: string
   onHandQty: number
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+  
   const userId = await requireUserId()
 
   const { error } = await supabase.from("inventory").upsert(
@@ -501,6 +528,12 @@ export async function upsertInventoryItemsBatchDB(input: Array<{
   productId: string
   onHandQty: number
 }>): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   if (!input.length) return
 
   const userId = await requireUserId()
@@ -531,6 +564,12 @@ export async function setStoreProductEnabledDB(input: {
   productId: string
   enabled: boolean
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase.from("store_product_states").upsert(
@@ -579,6 +618,12 @@ export async function setStoreProductsEnabledBulkDB(input: {
 ========================= */
 
 export async function createProductDB(p: Product): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase.from("products").upsert(
@@ -607,6 +652,12 @@ export async function createProductDB(p: Product): Promise<void> {
 }
 
 export async function createStoreDB(s: Store): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase.from("stores").upsert(
@@ -648,6 +699,12 @@ export async function createStoreDB(s: Store): Promise<void> {
 }
 
 export async function updateStoreDB(s: Store): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase.from("stores").upsert(
@@ -683,6 +740,12 @@ export async function updateProductCategoryDB(input: {
   productId: string
   category: string | null
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase
@@ -695,6 +758,12 @@ export async function updateProductCategoryDB(input: {
 }
 
 export async function deleteProductDB(productId: string): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase
@@ -707,6 +776,12 @@ export async function deleteProductDB(productId: string): Promise<void> {
 }
 
 export async function deleteStoreDB(storeId: string): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase
@@ -730,6 +805,12 @@ export async function upsertProductsBulkDB(input: {
     barcode?: string | null
   }>
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
   if (input.products.length === 0) return
 
@@ -755,6 +836,12 @@ export async function upsertProductsBulkDB(input: {
 export async function deleteProductsBulkDB(input: {
   productIds: string[]
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
   if (input.productIds.length === 0) return
 
@@ -792,6 +879,12 @@ export async function upsertMarketplaceCommissionRateDB(input: {
   marketplaceId: string
   commissionRate: number // 0.25 = 25%
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error } = await supabase.from("marketplace_settings").upsert(
@@ -810,6 +903,12 @@ export async function listSettlementsDB(input: {
   marketplaceId?: string
   periodMonth?: string // "YYYY-MM"
 }): Promise<DBSettlement[]> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   let q = supabase
@@ -859,6 +958,12 @@ export async function getSettlementDetailDB(input: {
 }
 
 export async function deleteSettlementV2DB(input: { settlementId: string }) {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   // 1) lines 삭제 (0개여도 가능)
@@ -976,6 +1081,12 @@ export async function upsertSettlementHeaderDB(input: {
   applyToInventory: boolean
   settlementType?: "detailed" | "summary"
 }): Promise<DBSettlement> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const payload = {
@@ -1018,6 +1129,12 @@ export async function replaceSettlementLinesDB(input: {
     matchStatus: "matched" | "unmatched" | "manual"
   }>
 }): Promise<void> {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+
   const userId = await requireUserId()
 
   const { error: delErr } = await supabase
@@ -1102,6 +1219,12 @@ export async function createSettlementWithItemsDB(params: {
   month: string
   items: CreateSettlementItemInput[]
 }) {
+
+  // 🔒 유지보수 모드 차단
+  if (IS_MAINTENANCE) {
+    throw new Error("현재 시스템 점검 중입니다. 잠시 후 다시 시도해주세요.")
+  }
+  
   const userId = await requireUserId()
   const { storeId, month, items } = params
 
