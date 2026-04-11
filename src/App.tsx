@@ -4,6 +4,7 @@ import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
 import type { Session } from "@supabase/supabase-js"
 import Pricing from "@/pages_legacy/Pricing"
 import "./App.css"
+import AppLoadingScreen from "@/components/shared/AppLoadingScreen"
 
 import AppLayout from "./app/layout/AppLayout"
 
@@ -70,33 +71,33 @@ export default function App() {
   useEffect(() => {
     let alive = true
 
-    ;(async () => {
-      if (!session) return
+      ; (async () => {
+        if (!session) return
 
-      try {
-        setProfileLoading(true)
-        const p = await getOrCreateMyProfile()
-        if (!alive) return
-        setProfile(p as MyProfile)
-      } catch (e) {
-        console.error("[App] profile load failed", e)
-        if (!alive) return
-        setProfile({ is_invited: false })
-      } finally {
-        if (alive) setProfileLoading(false)
-      }
-    })()
+        try {
+          setProfileLoading(true)
+          const p = await getOrCreateMyProfile()
+          if (!alive) return
+          setProfile(p as MyProfile)
+        } catch (e) {
+          console.error("[App] profile load failed", e)
+          if (!alive) return
+          setProfile({ is_invited: false })
+        } finally {
+          if (alive) setProfileLoading(false)
+        }
+      })()
 
     return () => {
       alive = false
     }
   }, [session])
 
-    // ✅ 1.5) 로그인 상태에서만 billing 로드
-    useEffect(() => {
-      let alive = true
-  
-      ;(async () => {
+  // ✅ 1.5) 로그인 상태에서만 billing 로드
+  useEffect(() => {
+    let alive = true
+
+      ; (async () => {
         if (!session) {
           if (!alive) return
           setBillingPlan("free")
@@ -104,88 +105,87 @@ export default function App() {
           setBillingLoaded(true)
           return
         }
-  
+
         try {
           setBillingLoaded(false)
           const billing = await getMyBilling()
           if (!alive) return
-  
+
           setBillingPlan(billing.plan_tier)
           setIsPaidUser(billing.is_paid)
         } catch (e) {
           console.error("[App] billing load failed", e)
           if (!alive) return
-  
+
           setBillingPlan("free")
           setIsPaidUser(false)
         } finally {
           if (alive) setBillingLoaded(true)
         }
       })()
-  
-      return () => {
-        alive = false
-      }
-    }, [session])
+
+    return () => {
+      alive = false
+    }
+  }, [session])
 
   // ✅ 2) 로그인 상태에서만 관리자 여부 체크
   useEffect(() => {
     let cancelled = false
 
-    ;(async () => {
-      if (!session) {
-        if (!cancelled) {
-          setIsAdmin(false)
-          setAdminChecked(true)
+      ; (async () => {
+        if (!session) {
+          if (!cancelled) {
+            setIsAdmin(false)
+            setAdminChecked(true)
+          }
+          return
         }
-        return
-      }
 
-      const { data, error } = await supabase.rpc("is_admin")
-      if (cancelled) return
+        const { data, error } = await supabase.rpc("is_admin")
+        if (cancelled) return
 
-      setIsAdmin(!error && !!data)
-      setAdminChecked(true)
-    })()
+        setIsAdmin(!error && !!data)
+        setAdminChecked(true)
+      })()
 
     return () => {
       cancelled = true
     }
   }, [session])
 
-  if (bootLoading) return <div className="app-loading">로딩 중...</div>
+  if (bootLoading) {
+    return <AppLoadingScreen message="서비스를 준비하고 있어요" />
+  }
 
   if (!session) {
     return (
-      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+      <Suspense fallback={<AppLoadingScreen message="로그인 화면을 불러오고 있어요" />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Suspense>
     )
-  }  
+  }
 
   // ✅ 4) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
   if (profileLoading || !profile || !adminChecked || !billingLoaded) {
-    return <div className="app-loading">초대 여부 확인 중…</div>
+    return <AppLoadingScreen message="초대 여부를 확인하고 있어요" />
   }
 
   if (!isAdmin && profile.is_invited !== true) {
     return (
-      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+      <Suspense fallback={<AppLoadingScreen message="화면을 불러오고 있어요" />}>
         <Routes>
           <Route path="/invite" element={<InviteGatePage />} />
           <Route path="*" element={<Navigate to="/invite" replace />} />
         </Routes>
       </Suspense>
     )
-  }  
+  }
 
   // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
-
-console.log("[App billing]", { billingLoaded, billingPlan, isPaidUser })
-console.log("[Supabase URL]", import.meta.env.VITE_SUPABASE_URL)
 
   return (
     <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
@@ -193,14 +193,14 @@ console.log("[Supabase URL]", import.meta.env.VITE_SUPABASE_URL)
         <Route
           element={
             <AppLayout
-  sessionEmail={session.user.email ?? ""}
-  isAdmin={isAdmin}
-  billingPlan={billingPlan}
-  onLogout={async () => {
-    await supabase.auth.signOut()
-    nav("/login")
-  }}
-/>
+              sessionEmail={session.user.email ?? ""}
+              isAdmin={isAdmin}
+              billingPlan={billingPlan}
+              onLogout={async () => {
+                await supabase.auth.signOut()
+                nav("/login")
+              }}
+            />
           }
         >
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -213,23 +213,23 @@ console.log("[Supabase URL]", import.meta.env.VITE_SUPABASE_URL)
           <Route path="/settlements" element={<SettlementsPage />} />
           <Route path="/pricing" element={<Pricing />} />
           <Route
-  path="/invite"
-  element={
-    !isAdmin && profile.is_invited !== true ? (
-      <InviteGatePage />
-    ) : (
-      <Navigate to="/dashboard" replace />
-    )
-  }
-/>
+            path="/invite"
+            element={
+              !isAdmin && profile.is_invited !== true ? (
+                <InviteGatePage />
+              ) : (
+                <Navigate to="/dashboard" replace />
+              )
+            }
+          />
           {/* Admin */}
-<Route
-  path="/admin/invites"
-  element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
-/>
+          <Route
+            path="/admin/invites"
+            element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
+          />
 
-{/* (임시) /admin/users로 들어오면 invites로 보내기 */}
-<Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
+          {/* (임시) /admin/users로 들어오면 invites로 보내기 */}
+          <Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
 
           {/* Backward compat */}
           <Route path="/master" element={<Navigate to="/products" replace />} />

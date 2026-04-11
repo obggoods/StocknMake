@@ -24,6 +24,7 @@ input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
+
 input[type="number"] {
   -moz-appearance: textfield;
 }
@@ -34,6 +35,7 @@ a {
   text-decoration: inherit;
   font-weight: inherit;
 }
+
 a:hover,
 a:visited {
   color: inherit;
@@ -58,6 +60,13 @@ a:visited {
 
   --muted: oklch(0.975 0.010 95);
   --muted-foreground: oklch(0.520 0.015 90);
+
+  /* 상태용 토큰 */
+  --success: oklch(0.700 0.060 145);
+  --success-foreground: oklch(0.260 0.018 145);
+
+  --warning: oklch(0.780 0.110 85);
+  --warning-foreground: oklch(0.330 0.040 75);
 
   --accent: oklch(0.935 0.030 145);
   --accent-foreground: oklch(0.320 0.020 140);
@@ -114,6 +123,13 @@ a:visited {
   --accent: oklch(0.310 0.030 145);
   --accent-foreground: oklch(0.940 0.010 95);
 
+  /* 다크모드 상태용 토큰 */
+  --success: oklch(0.760 0.070 145);
+  --success-foreground: oklch(0.180 0.010 145);
+
+  --warning: oklch(0.820 0.120 85);
+  --warning-foreground: oklch(0.210 0.018 75);
+
   --destructive: oklch(0.650 0.190 25);
   --destructive-foreground: oklch(0.980 0.006 95);
 
@@ -154,6 +170,12 @@ a:visited {
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
 
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
 
@@ -188,28 +210,21 @@ a:visited {
 
 /* 안전한 base layer: 문제 유틸(@apply border-border) 사용 안 함 */
 @layer base {
- /* Tailwind v4 기본 border 색(currentColor) 방지: 전역 border 색을 토큰으로 고정 */
- *,
- ::before,
- ::after {
-   border-color: var(--border);
- }
 
- body {
-   background: var(--background);
-   color: var(--foreground);
- }
-}
-/* 모달 열 때 스크롤바 유무로 레이아웃이 흔들리는 문제 방지 */
-html {
-  scrollbar-gutter: stable;
+  /* Tailwind v4 기본 border 색(currentColor) 방지: 전역 border 색을 토큰으로 고정 */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+  }
 }
 
 /* Radix(Dialog)가 스크롤 잠금 시 body에 padding-right를 넣어 생기는 흰 여백 제거 */
 body[data-scroll-locked] {
   padding-right: 0 !important;
-}
-
-html {
-  overflow-y: scroll;
 }

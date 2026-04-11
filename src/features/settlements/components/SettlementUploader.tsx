@@ -42,6 +42,7 @@ import {
   getMarketplaceCommissionRateDB,
   replaceSettlementLinesDB,
   upsertSettlementHeaderDB,
+  recomputeSettlementProductStatsDB,
 } from "@/data/store.supabase"
 
 import { generateId } from "@/data/store"
@@ -223,7 +224,7 @@ function SelectField(props: {
   )
 }
 
-export default function SettlementUploader() {
+export default function SettlementUploader({ onSaved }: SettlementUploaderProps) {
   const a = useAppData()
   const products = a.data.products ?? []
 
@@ -396,15 +397,15 @@ export default function SettlementUploader() {
   // ✅ 파일 선택 → 텍스트 저장 + 헤더 추출 + 매핑 추정
   const onPickFile = useCallback(async (file: File) => {
     // ✅ 업로드 파일 기본 검증 (운영 안전장치)
-  const MAX_BYTES = 5 * 1024 * 1024 // 5MB
-  if (file.size > MAX_BYTES) {
-    toast.error("CSV 파일이 너무 큽니다. 5MB 이하로 업로드해주세요.")
-    return
-  }
-  if (!file.name.toLowerCase().endsWith(".csv")) {
-    toast.error("CSV 파일(.csv)만 업로드할 수 있습니다.")
-    return
-  }
+    const MAX_BYTES = 5 * 1024 * 1024 // 5MB
+    if (file.size > MAX_BYTES) {
+      toast.error("CSV 파일이 너무 큽니다. 5MB 이하로 업로드해주세요.")
+      return
+    }
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      toast.error("CSV 파일(.csv)만 업로드할 수 있습니다.")
+      return
+    }
     try {
       const text = await file.text()
       const { headers } = parseCsvTextBasic(text)
@@ -444,12 +445,12 @@ export default function SettlementUploader() {
   const canBuildPreview = useMemo(() => {
     return Boolean(
       csvText &&
-        csvHeaders.length > 0 &&
-        selectedStoreId &&
-        selectedMonth &&
-        mapping.barcode &&
-        mapping.sold_qty &&
-        mapping.amount
+      csvHeaders.length > 0 &&
+      selectedStoreId &&
+      selectedMonth &&
+      mapping.barcode &&
+      mapping.sold_qty &&
+      mapping.amount
     )
   }, [csvText, csvHeaders.length, selectedStoreId, selectedMonth, mapping])
 
@@ -479,10 +480,10 @@ export default function SettlementUploader() {
       }
 
       const MAX_ROWS = 5000
-if (parsed.length > MAX_ROWS) {
-  toast.error(`한 번에 ${MAX_ROWS.toLocaleString()}행 이하만 업로드할 수 있습니다.`)
-  return
-}
+      if (parsed.length > MAX_ROWS) {
+        toast.error(`한 번에 ${MAX_ROWS.toLocaleString()}행 이하만 업로드할 수 있습니다.`)
+        return
+      }
 
       buildPreview(parsed)
       toast.success("미리보기를 생성했어요. 적용 전 내용을 확인하세요.")
@@ -495,42 +496,42 @@ if (parsed.length > MAX_ROWS) {
   async function saveSummarySettlement() {
     try {
       if (busy) return
-  
+
       if (!summaryStoreId) {
         toast.error("입점처를 선택해줘")
         return
       }
-  
+
       if (!summaryMonth) {
         toast.error("정산 월을 선택해줘")
         return
       }
-  
+
       const grossAmount = Number(String(summaryGrossAmount).replaceAll(",", "").trim())
-  
+
       if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
         toast.error("판매총액을 올바르게 입력해줘")
         return
       }
-  
+
       if (grossAmount > 1000000000000) {
         toast.error("판매총액이 너무 커. 값을 다시 확인해줘")
         return
       }
-  
+
       const commissionRatePercent = Number(
         String(summaryCommissionRate).replaceAll(",", "").trim()
       )
-  
+
       if (!Number.isFinite(commissionRatePercent) || commissionRatePercent < 0 || commissionRatePercent > 100) {
         toast.error("수수료율은 0~100 사이로 입력해줘")
         return
       }
-  
+
       const commissionRate = commissionRatePercent / 100
       const commissionAmount = Math.round(grossAmount * commissionRate)
       const netAmount = grossAmount - commissionAmount
-  
+
       const saved = await upsertSettlementHeaderDB({
         marketplaceId: summaryStoreId,
         periodMonth: summaryMonth,
@@ -544,22 +545,31 @@ if (parsed.length > MAX_ROWS) {
         applyToInventory: false,
         settlementType: "summary",
       })
-  
+
       await replaceSettlementLinesDB({
         settlementId: saved.id,
         marketplaceId: summaryStoreId,
         lines: [],
       })
-  
+
+      await recomputeSettlementProductStatsDB({
+        marketplaceId: summaryStoreId,
+        periodMonth: summaryMonth,
+      })
+
       setSummaryOpen(false)
       setSummaryStoreId("")
       setSummaryGrossAmount("")
       setSummaryCommissionRate("")
-  
+
       if (typeof (a as any).refresh === "function") {
         await (a as any).refresh()
       }
-  
+
+      if (onSaved) {
+        await onSaved()
+      }
+
       toast.success("판매총액 정산이 저장됐어")
     } catch (error: any) {
       console.error(error)
@@ -580,37 +590,37 @@ if (parsed.length > MAX_ROWS) {
       toast.error("오류가 있는 행이 있어 적용할 수 없습니다. (삭제해서 제외할 수 있어요)")
       return
     }
-  
+
     const okRows = rows
       .filter((r) => !r.ignored)
       .filter((r) => r.status === "ok") as Array<Required<PreviewRow>>
-  
+
     const byStoreMonth = new Map<
       string,
       { storeId: string; month: string; storeName: string; rows: Required<PreviewRow>[] }
     >()
-  
+
     for (const r of okRows) {
       const key = `${r.storeId}__${r.period}`
       const cur = byStoreMonth.get(key)
       if (!cur) byStoreMonth.set(key, { storeId: r.storeId, month: r.period, storeName: r.storeName, rows: [r] })
       else cur.rows.push(r)
     }
-  
+
     try {
       setBusy(true)
-  
+
       // ✅ 재고 반영 확인은 apply 시작 시 1회만 (부분 적용/반복 confirm 방지)
       const shouldApplyInventory =
         applyToInventory ? window.confirm("판매 수량을 재고에 반영하시겠습니까?") : false
-  
+
       for (const g of byStoreMonth.values()) {
         // === 1) old qty map ===
         const existing = await getSettlementV2ByMarketplaceMonthDB({
           marketplaceId: g.storeId,
           periodMonth: g.month,
         })
-  
+
         const oldQty = new Map<string, number>()
         if (existing?.id) {
           const oldLines = await listSettlementLinesV2DB({ settlementId: existing.id })
@@ -621,13 +631,13 @@ if (parsed.length > MAX_ROWS) {
             oldQty.set(pid, (oldQty.get(pid) ?? 0) + q)
           }
         }
-  
+
         // === 2) new lines aggregate ===
         const agg = new Map<
           string,
           { productId: string; productName: string; soldQty: number; unitPrice: number; gross: number }
         >()
-  
+
         for (const r of g.rows) {
           const k = r.productId
           const prev = agg.get(k)
@@ -646,7 +656,7 @@ if (parsed.length > MAX_ROWS) {
             prev.gross = prev.soldQty * prev.unitPrice
           }
         }
-  
+
         const lines = Array.from(agg.values()).map((x) => ({
           productId: x.productId,
           productNameRaw: x.productName || "(unknown)",
@@ -657,9 +667,9 @@ if (parsed.length > MAX_ROWS) {
           grossAmount: x.gross,
           matchStatus: "matched" as const,
         }))
-  
+
         const grossAmount = lines.reduce((sum, l) => sum + l.grossAmount, 0)
-  
+
         // === 3) commission rate ===
         let commissionRate = 0
         try {
@@ -672,10 +682,10 @@ if (parsed.length > MAX_ROWS) {
           const pct = Number(store?.commissionRate ?? 0) || 0
           commissionRate = pct / 100
         }
-  
+
         const commissionAmount = Math.round(grossAmount * commissionRate)
         const netAmount = grossAmount - commissionAmount
-  
+
         // === 4) header upsert + replace lines ===
         const settlement = await upsertSettlementHeaderDB({
           marketplaceId: g.storeId,
@@ -689,13 +699,18 @@ if (parsed.length > MAX_ROWS) {
           sourceFilename: lastFileName || null,
           applyToInventory: shouldApplyInventory,
         })
-  
+
         await replaceSettlementLinesDB({
           settlementId: settlement.id,
           marketplaceId: g.storeId,
           lines,
         })
-  
+
+        await recomputeSettlementProductStatsDB({
+          marketplaceId: g.storeId,
+          periodMonth: g.month,
+        })
+
         // === 5) delta inventory apply (optional) ===
         if (shouldApplyInventory) {
           const newQty = new Map<string, number>()
@@ -704,35 +719,41 @@ if (parsed.length > MAX_ROWS) {
             if (!pid) continue
             newQty.set(pid, (newQty.get(pid) ?? 0) + Number(l.qtySold ?? 0))
           }
-  
+
           const allPids = new Set<string>([...oldQty.keys(), ...newQty.keys()])
           const updates: Array<{ storeId: string; productId: string; onHandQty: number }> = []
 
-for (const pid of allPids) {
-  const oldQ = oldQty.get(pid) ?? 0
-  const newQ = newQty.get(pid) ?? 0
-  const delta = newQ - oldQ
-  if (delta === 0) continue
+          for (const pid of allPids) {
+            const oldQ = oldQty.get(pid) ?? 0
+            const newQ = newQty.get(pid) ?? 0
+            const delta = newQ - oldQ
+            if (delta === 0) continue
 
-  const inv = a.data.inventory.find((x: any) => x.storeId === g.storeId && x.productId === pid)
-  const current = Number(inv?.onHandQty ?? 0)
+            const inv = a.data.inventory.find((x: any) => x.storeId === g.storeId && x.productId === pid)
+            const current = Number(inv?.onHandQty ?? 0)
 
-  const nextQty = delta > 0 ? Math.max(0, current - delta) : current + Math.abs(delta)
+            const nextQty = delta > 0 ? Math.max(0, current - delta) : current + Math.abs(delta)
 
-  updates.push({ storeId: g.storeId, productId: pid, onHandQty: nextQty })
-}
+            updates.push({ storeId: g.storeId, productId: pid, onHandQty: nextQty })
+          }
 
-// ✅ 여기서 한 번에 업서트 (chunk는 내부에서 처리)
-await upsertInventoryItemsBatchDB(updates)
+          // ✅ 여기서 한 번에 업서트 (chunk는 내부에서 처리)
+          await upsertInventoryItemsBatchDB(updates)
         }
       }
-  
+
       toast.success(shouldApplyInventory ? "정산 저장 + 재고 반영 완료" : "정산 저장 완료 (재고 미반영)")
       setRows(null)
       setLastFileName("")
       setCsvText("")
       setCsvHeaders([])
+
       await a.refresh()
+
+      if (onSaved) {
+        await onSaved()
+      }
+
     } catch (e: any) {
       console.error(e)
       toast.error(`정산(v2) 저장 실패: ${e?.message ?? e}`)
@@ -740,7 +761,7 @@ await upsertInventoryItemsBatchDB(updates)
     } finally {
       setBusy(false)
     }
-  }, [rows, a, lastFileName, applyToInventory])
+  }, [rows, a, lastFileName, applyToInventory, onSaved])
 
   if (a.errorMsg) return <ErrorState message={a.errorMsg} onRetry={a.refresh} />
 
@@ -768,13 +789,13 @@ await upsertInventoryItemsBatchDB(updates)
             </AppButton>
 
             <AppButton
-  type="button"
-  variant="outline"
-  onClick={() => setSummaryOpen((v) => !v)}
-  disabled={a.loading || busy}
->
-  판매총액만 입력
-</AppButton>
+              type="button"
+              variant="outline"
+              onClick={() => setSummaryOpen((v) => !v)}
+              disabled={a.loading || busy}
+            >
+              판매총액만 입력
+            </AppButton>
 
             <input
               ref={inputRef}
@@ -788,115 +809,115 @@ await upsertInventoryItemsBatchDB(updates)
         contentClassName="px-4 pb-4"
       >
         {summaryOpen ? (
-  <div className="mt-4 space-y-3">
-    <div className="rounded-xl border p-4 space-y-3">
-      <div className="text-sm font-medium">판매총액만 입력</div>
-      <div className="text-xs text-muted-foreground">
-        제품별 판매수량 없이, 월별 판매총액만 정산으로 저장합니다.
-        재고는 반영되지 않아요.
-      </div>
+          <div className="mt-4 space-y-3">
+            <div className="rounded-xl border p-4 space-y-3">
+              <div className="text-sm font-medium">판매총액만 입력</div>
+              <div className="text-xs text-muted-foreground">
+                제품별 판매수량 없이, 월별 판매총액만 정산으로 저장합니다.
+                재고는 반영되지 않아요.
+              </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">
-            입점처 <span className="text-destructive"> *</span>
-          </span>
-          <select
-            className="h-9 rounded-md border bg-background px-2 text-sm"
-            value={summaryStoreId}
-            onChange={(e) => setSummaryStoreId(e.target.value)}
-          >
-            <option value="">선택</option>
-            {a.data.stores.map((s: any) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <label className="grid gap-1">
+                  <span className="text-xs text-muted-foreground">
+                    입점처 <span className="text-destructive"> *</span>
+                  </span>
+                  <select
+                    className="h-9 rounded-md border bg-background px-2 text-sm"
+                    value={summaryStoreId}
+                    onChange={(e) => setSummaryStoreId(e.target.value)}
+                  >
+                    <option value="">선택</option>
+                    {a.data.stores.map((s: any) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">
-            월(YYYY.MM) <span className="text-destructive"> *</span>
-          </span>
-          <select
-            className="h-9 rounded-md border bg-background px-2 text-sm"
-            value={summaryMonth}
-            onChange={(e) => setSummaryMonth(e.target.value)}
-          >
-            {Array.from({ length: 24 }).map((_, i) => {
-              const d = new Date()
-              d.setMonth(d.getMonth() - i)
-              const y = d.getFullYear()
-              const m = String(d.getMonth() + 1).padStart(2, "0")
-              const value = `${y}-${m}`
-              const label = `${y}.${m}`
-              return (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              )
-            })}
-          </select>
-        </label>
+                <label className="grid gap-1">
+                  <span className="text-xs text-muted-foreground">
+                    월(YYYY.MM) <span className="text-destructive"> *</span>
+                  </span>
+                  <select
+                    className="h-9 rounded-md border bg-background px-2 text-sm"
+                    value={summaryMonth}
+                    onChange={(e) => setSummaryMonth(e.target.value)}
+                  >
+                    {Array.from({ length: 24 }).map((_, i) => {
+                      const d = new Date()
+                      d.setMonth(d.getMonth() - i)
+                      const y = d.getFullYear()
+                      const m = String(d.getMonth() + 1).padStart(2, "0")
+                      const value = `${y}-${m}`
+                      const label = `${y}.${m}`
+                      return (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </label>
 
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">
-            판매총액(원) <span className="text-destructive"> *</span>
-          </span>
-          <AppInput
-            inputMode="numeric"
-            placeholder="예: 1250000"
-            value={summaryGrossAmount}
-            onChange={(e) => {
-              const onlyNumber = e.target.value.replace(/[^\d]/g, "")
-              setSummaryGrossAmount(onlyNumber)
-            }}
-          />
-        </label>
-      </div>
+                <label className="grid gap-1">
+                  <span className="text-xs text-muted-foreground">
+                    판매총액(원) <span className="text-destructive"> *</span>
+                  </span>
+                  <AppInput
+                    inputMode="numeric"
+                    placeholder="예: 1250000"
+                    value={summaryGrossAmount}
+                    onChange={(e) => {
+                      const onlyNumber = e.target.value.replace(/[^\d]/g, "")
+                      setSummaryGrossAmount(onlyNumber)
+                    }}
+                  />
+                </label>
+              </div>
 
-      <label className="grid gap-1">
-  <span className="text-xs text-muted-foreground">
-    수수료율(%) <span className="text-destructive"> *</span>
-  </span>
-  <AppInput
-    inputMode="decimal"
-    placeholder="예: 30"
-    value={summaryCommissionRate}
-    onChange={(e) => {
-      const cleaned = e.target.value.replace(/[^\d.]/g, "")
-      setSummaryCommissionRate(cleaned)
-    }}
-  />
-</label>
+              <label className="grid gap-1">
+                <span className="text-xs text-muted-foreground">
+                  수수료율(%) <span className="text-destructive"> *</span>
+                </span>
+                <AppInput
+                  inputMode="decimal"
+                  placeholder="예: 30"
+                  value={summaryCommissionRate}
+                  onChange={(e) => {
+                    const cleaned = e.target.value.replace(/[^\d.]/g, "")
+                    setSummaryCommissionRate(cleaned)
+                  }}
+                />
+              </label>
 
-      <div className="flex flex-wrap justify-end gap-2">
-        <AppButton
-          type="button"
-          variant="outline"
-          onClick={() => {
-            setSummaryOpen(false)
-            setSummaryStoreId("")
-            setSummaryGrossAmount("")
-            setSummaryCommissionRate("")
-          }}
-          disabled={busy}
-        >
-          취소
-        </AppButton>
+              <div className="flex flex-wrap justify-end gap-2">
+                <AppButton
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setSummaryOpen(false)
+                    setSummaryStoreId("")
+                    setSummaryGrossAmount("")
+                    setSummaryCommissionRate("")
+                  }}
+                  disabled={busy}
+                >
+                  취소
+                </AppButton>
 
-        <AppButton
-          type="button"
-          onClick={saveSummarySettlement}
-          disabled={busy}
-        >
-          {busy ? "저장 중…" : "판매총액 정산 저장"}
-        </AppButton>
-      </div>
-    </div>
-  </div>
-) : null}
+                <AppButton
+                  type="button"
+                  onClick={saveSummarySettlement}
+                  disabled={busy}
+                >
+                  {busy ? "저장 중…" : "판매총액 정산 저장"}
+                </AppButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {csvHeaders.length > 0 && !rows ? (
           <div className="mt-4 space-y-3">
@@ -1045,7 +1066,7 @@ await upsertInventoryItemsBatchDB(updates)
                         <div className="flex flex-col gap-2">
                           <div>
                             {r.status === "ok" ? (
-                              <span className="text-xs text-emerald-600">OK</span>
+                              <span className="text-xs text-success">OK</span>
                             ) : (
                               <span className="text-xs text-destructive">매칭 필요</span>
                             )}
@@ -1111,7 +1132,7 @@ await upsertInventoryItemsBatchDB(updates)
                             </div>
                           ) : null}
 
-<div className="flex justify-end">
+                          <div className="flex justify-end">
                             <AppButton
                               type="button"
                               variant="outline"

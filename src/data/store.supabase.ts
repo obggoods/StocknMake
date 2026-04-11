@@ -378,6 +378,7 @@ export async function getSettlementV2ByMarketplaceMonthDB(input: {
 export async function listSettlementLinesV2DB(input: {
   settlementId: string
 }) {
+  
   const userId = await requireUserId()
 
   console.time("[perf] settlement_lines_v2")
@@ -393,6 +394,151 @@ export async function listSettlementLinesV2DB(input: {
 
   if (error) throw error
   return (data ?? []) as any[]
+}
+
+export async function recomputeSettlementProductStatsDB(input: {
+  marketplaceId: string
+  periodMonth: string
+}): Promise<void> {
+  const userId = await requireUserId()
+
+  // 1) 해당 월/입점처의 상세 정산 헤더 id 목록
+  const { data: settlements, error: sErr } = await supabase
+    .from("settlements_v2")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("marketplace_id", input.marketplaceId)
+    .eq("period_month", input.periodMonth)
+    .eq("settlement_type", "detailed")
+
+  if (sErr) throw sErr
+
+  const settlementIds = (settlements ?? []).map((row: any) => String(row.id))
+
+  // 2) 기존 집계 삭제
+  const { error: delErr } = await supabase
+    .from("settlement_product_stats")
+    .delete()
+    .eq("user_id", userId)
+    .eq("marketplace_id", input.marketplaceId)
+    .eq("period_month", input.periodMonth)
+
+  if (delErr) throw delErr
+
+  // 3) 상세 정산이 없으면 여기서 종료
+  if (settlementIds.length === 0) return
+
+  // 4) 해당 월/입점처 settlement line 로드
+  const { data: lines, error: lErr } = await supabase
+    .from("settlement_lines_v2")
+    .select(
+      [
+        "product_id",
+        "product_name_raw",
+        "product_name_matched",
+        "qty_sold",
+        "gross_amount",
+      ].join(",")
+    )
+    .eq("user_id", userId)
+    .eq("marketplace_id", input.marketplaceId)
+    .in("settlement_id", settlementIds)
+
+  if (lErr) throw lErr
+
+  // 5) 상품명 기준 집계
+  const agg = new Map<
+    string,
+    {
+      productId: string | null
+      productName: string
+      qtySoldSum: number
+      grossAmountSum: number
+    }
+  >()
+
+  for (const row of lines ?? []) {
+    const productName =
+      String((row as any).product_name_matched ?? (row as any).product_name_raw ?? "상품").trim() || "상품"
+
+    const productId = (row as any).product_id ? String((row as any).product_id) : null
+    const qtySold = Number((row as any).qty_sold ?? 0) || 0
+    const grossAmount = Number((row as any).gross_amount ?? 0) || 0
+
+    const current =
+      agg.get(productName) ?? {
+        productId,
+        productName,
+        qtySoldSum: 0,
+        grossAmountSum: 0,
+      }
+
+    current.qtySoldSum += qtySold
+    current.grossAmountSum += grossAmount
+
+    if (!current.productId && productId) {
+      current.productId = productId
+    }
+
+    agg.set(productName, current)
+  }
+
+  // 6) 저장
+  const rows = Array.from(agg.values()).map((row) => ({
+    user_id: userId,
+    marketplace_id: input.marketplaceId,
+    period_month: input.periodMonth,
+    product_id: row.productId,
+    product_name: row.productName,
+    qty_sold_sum: row.qtySoldSum,
+    gross_amount_sum: row.grossAmountSum,
+    updated_at: new Date().toISOString(),
+  }))
+
+  if (rows.length === 0) return
+
+  const { error: insErr } = await supabase
+    .from("settlement_product_stats")
+    .upsert(rows, {
+      onConflict: "user_id,marketplace_id,period_month,product_name",
+    })
+
+  if (insErr) throw insErr
+}
+
+export async function listSettlementProductStatsDB(input: {
+  periodMonth: string
+  marketplaceId?: string
+}) {
+  const userId = await requireUserId()
+
+  let q = supabase
+    .from("settlement_product_stats")
+    .select(
+      [
+        "id",
+        "user_id",
+        "marketplace_id",
+        "period_month",
+        "product_id",
+        "product_name",
+        "qty_sold_sum",
+        "gross_amount_sum",
+        "updated_at",
+      ].join(",")
+    )
+    .eq("user_id", userId)
+    .eq("period_month", input.periodMonth)
+    .order("qty_sold_sum", { ascending: false })
+    .order("gross_amount_sum", { ascending: false })
+
+  if (input.marketplaceId) {
+    q = q.eq("marketplace_id", input.marketplaceId)
+  }
+
+  const { data, error } = await q
+  if (error) throw error
+  return data ?? []
 }
 
 /* =========================
