@@ -149,79 +149,78 @@ function DashboardViewInner() {
     settlementSummary.prevTotal === 0
       ? "muted"
       : (settlementSummary.delta ?? 0) >= 0
-        ? "default"
+        ? "success"
         : "destructive"
-
   return (
     <div className="space-y-4">
       {/* KPI */}
-<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-  <AppCard className="shadow-sm">
-    <div className="space-y-1">
-      <p className="text-sm text-muted-foreground">총 SKU</p>
-      <p className="text-3xl font-semibold tabular-nums">{totalSku}</p>
-      <p className="text-xs text-muted-foreground">제품 DB 기준</p>
-    </div>
-  </AppCard>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <AppCard className="shadow-sm">
+          <div className="space-y-1">
+            <p className="text-sm text-muted-foreground">총 SKU</p>
+            <p className="text-3xl font-semibold tabular-nums">{totalSku}</p>
+            <p className="text-xs text-muted-foreground">제품 DB 기준</p>
+          </div>
+        </AppCard>
 
-  <AppCard className="shadow-sm">
-    <div className="space-y-1">
-      <p className="text-sm text-muted-foreground">입점처 수</p>
-      <p className="text-3xl font-semibold tabular-nums">{storeCount}</p>
-      <p className="text-xs text-muted-foreground">등록된 채널</p>
-    </div>
-  </AppCard>
+        <AppCard className="shadow-sm">
+          <div className="space-y-1">
+            <p className="text-sm text-muted-foreground">입점처 수</p>
+            <p className="text-3xl font-semibold tabular-nums">{storeCount}</p>
+            <p className="text-xs text-muted-foreground">등록된 채널</p>
+          </div>
+        </AppCard>
 
-  <AppCard className="shadow-sm">
-    <div className="flex items-start justify-between gap-3">
-      <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">저재고 SKU</p>
-        <p className="text-3xl font-semibold tabular-nums">{lowStockCount}</p>
-        <p className="text-xs text-muted-foreground">기준: &lt; {lowStockThreshold}</p>
+        <AppCard className="shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">저재고 SKU</p>
+              <p className="text-3xl font-semibold tabular-nums">{lowStockCount}</p>
+              <p className="text-xs text-muted-foreground">기준: &lt; {lowStockThreshold}</p>
+            </div>
+            {lowStockCount > 0 ? (
+              <AppBadge variant="warning">주의</AppBadge>
+            ) : (
+              <AppBadge variant="success">안정</AppBadge>
+            )}
+          </div>
+
+          <div className="mt-3">
+            <AppButton
+              variant="secondary"
+              className="w-full font-medium"
+              onClick={() => nav("/inventory?tab=inventory")}
+            >
+              재고 보기
+            </AppButton>
+          </div>
+        </AppCard>
+
+        <AppCard className="shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">제작 필요 제품</p>
+              <p className="text-3xl font-semibold tabular-nums">{makeNeedProductCount}</p>
+              <p className="text-xs text-muted-foreground">목표 재고: {targetQty}</p>
+            </div>
+            {makeNeedProductCount > 0 ? (
+              <AppBadge variant="task">할 일</AppBadge>
+            ) : (
+              <AppBadge variant="success">완료</AppBadge>
+            )}
+          </div>
+
+          <div className="mt-3">
+            <AppButton
+              variant="secondary"
+              className="w-full"
+              onClick={() => nav("/inventory?tab=make")}
+            >
+              제작 보기
+            </AppButton>
+          </div>
+        </AppCard>
       </div>
-      {lowStockCount > 0 ? (
-        <AppBadge variant="destructive">주의</AppBadge>
-      ) : (
-        <AppBadge variant="muted">안정</AppBadge>
-      )}
-    </div>
-
-    <div className="mt-3">
-      <AppButton
-        variant="secondary"
-        className="w-full"
-        onClick={() => nav("/inventory?tab=inventory")}
-      >
-        재고 보기
-      </AppButton>
-    </div>
-  </AppCard>
-
-  <AppCard className="shadow-sm">
-    <div className="flex items-start justify-between gap-3">
-      <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">제작 필요 제품</p>
-        <p className="text-3xl font-semibold tabular-nums">{makeNeedProductCount}</p>
-        <p className="text-xs text-muted-foreground">목표 재고: {targetQty}</p>
-      </div>
-      {makeNeedProductCount > 0 ? (
-        <AppBadge>할 일</AppBadge>
-      ) : (
-        <AppBadge variant="muted">완료</AppBadge>
-      )}
-    </div>
-
-    <div className="mt-3">
-      <AppButton
-        variant="secondary"
-        className="w-full"
-        onClick={() => nav("/inventory?tab=make")}
-      >
-        제작 보기
-      </AppButton>
-    </div>
-  </AppCard>
-</div>
 
       {/* 매출 요약 */}
       <AppCard className="shadow-sm">
@@ -256,7 +255,7 @@ function DashboardViewInner() {
             <p className="text-xs text-muted-foreground">전월 대비</p>
             <div className="mt-1 flex items-center gap-2">
               <p className="text-2xl font-semibold tabular-nums">{deltaLabel}</p>
-              <AppBadge variant={deltaVariant as any}>{deltaLabel}</AppBadge>
+              <AppBadge variant={deltaVariant}>{deltaLabel}</AppBadge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               지난달({prevMonth}): {fmtKRW(settlementSummary.prevTotal)}원

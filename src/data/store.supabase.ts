@@ -221,15 +221,14 @@ if (IS_MAINTENANCE) {
 ========================= */
 
 export async function loadDataFromDB(): Promise<AppData> {
+  console.time("[perf] loadDataFromDB")
   const userId = await requireUserId()
 
   const [
     productsRes,
     storesRes,
     invRes,
-    settlementsRes,
     settlementsV2Res,
-    settlementItemsRes,
   ] = await Promise.all([
     supabase
       .from("products")
@@ -252,13 +251,6 @@ export async function loadDataFromDB(): Promise<AppData> {
       .select("store_id,product_id,on_hand_qty,updated_at")
       .eq("user_id", userId),
 
-    // legacy settlements
-    supabase
-      .from("settlements")
-      .select("id,store_id,month,created_at,updated_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false }),
-
     // settlements v2 (new engine header list)
     supabase
       .from("settlements_v2")
@@ -266,38 +258,20 @@ export async function loadDataFromDB(): Promise<AppData> {
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
 
-    // legacy settlement items
-    supabase
-      .from("settlement_items")
-      .select("settlement_id,product_id,sold_qty,unit_price,currency,created_at")
-      .eq("user_id", userId),
   ])
 
   const err =
     productsRes.error ||
     storesRes.error ||
     invRes.error ||
-    settlementsRes.error ||
-    settlementsV2Res.error ||
-    settlementItemsRes.error
+    settlementsV2Res.error
 
   if (err) throw err
 
   const products = (productsRes.data ?? []) as DBProduct[]
   const stores = storesRes.data ?? []
   const inventory = (invRes.data ?? []) as DBInventory[]
-  const settlements = (settlementsRes.data ?? []) as DBLegacySettlement[]
   const settlementsV2 = (settlementsV2Res.data ?? []) as any[]
-  const settlementItems = (settlementItemsRes.data ?? []) as DBLegacySettlementItem[]
-
-  // legacy: settlement_id -> items
-  const itemsBySettlementId = new Map<string, DBLegacySettlementItem[]>()
-  for (const it of settlementItems) {
-    const sid = it.settlement_id
-    const arr = itemsBySettlementId.get(sid) ?? []
-    arr.push(it)
-    itemsBySettlementId.set(sid, arr)
-  }
 
   // seed 보장 (store/product 조합이 실제로 비어있을 수 있으므로)
   await ensureStoreProductStatesSeedDB({
@@ -312,7 +286,7 @@ export async function loadDataFromDB(): Promise<AppData> {
     .eq("user_id", userId)
 
   if (spsErr) throw spsErr
-
+  console.timeEnd("[perf] loadDataFromDB")
   return {
     ...createEmptyData(),
 
@@ -376,20 +350,8 @@ export async function loadDataFromDB(): Promise<AppData> {
       enabled: x.enabled ?? true,
     })),
 
-    // legacy settlements 유지
-    settlements: settlements.map((s) => ({
-      id: s.id,
-      storeId: s.store_id,
-      month: s.month,
-      items: (itemsBySettlementId.get(s.id) ?? []).map((it) => ({
-        productId: it.product_id,
-        soldQty: it.sold_qty ?? 0,
-        unitPrice: it.unit_price ?? 0,
-        currency: it.currency ?? "KRW",
-      })),
-      createdAt: new Date(s.created_at).getTime(),
-      updatedAt: new Date(s.updated_at).getTime(),
-    })),
+    // legacy settlements는 초기 전체 로딩에서 제외
+    settlements: [],
 
     updatedAt: Date.now(),
   }
@@ -416,7 +378,10 @@ export async function getSettlementV2ByMarketplaceMonthDB(input: {
 export async function listSettlementLinesV2DB(input: {
   settlementId: string
 }) {
+  
   const userId = await requireUserId()
+
+  console.time("[perf] settlement_lines_v2")
 
   const { data, error } = await supabase
     .from("settlement_lines_v2")
@@ -425,8 +390,155 @@ export async function listSettlementLinesV2DB(input: {
     .eq("settlement_id", input.settlementId)
     .order("gross_amount", { ascending: false })
 
+  console.timeEnd("[perf] settlement_lines_v2")
+
   if (error) throw error
   return (data ?? []) as any[]
+}
+
+export async function recomputeSettlementProductStatsDB(input: {
+  marketplaceId: string
+  periodMonth: string
+}): Promise<void> {
+  const userId = await requireUserId()
+
+  // 1) 해당 월/입점처의 상세 정산 헤더 id 목록
+  const { data: settlements, error: sErr } = await supabase
+    .from("settlements_v2")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("marketplace_id", input.marketplaceId)
+    .eq("period_month", input.periodMonth)
+    .eq("settlement_type", "detailed")
+
+  if (sErr) throw sErr
+
+  const settlementIds = (settlements ?? []).map((row: any) => String(row.id))
+
+  // 2) 기존 집계 삭제
+  const { error: delErr } = await supabase
+    .from("settlement_product_stats")
+    .delete()
+    .eq("user_id", userId)
+    .eq("marketplace_id", input.marketplaceId)
+    .eq("period_month", input.periodMonth)
+
+  if (delErr) throw delErr
+
+  // 3) 상세 정산이 없으면 여기서 종료
+  if (settlementIds.length === 0) return
+
+  // 4) 해당 월/입점처 settlement line 로드
+  const { data: lines, error: lErr } = await supabase
+    .from("settlement_lines_v2")
+    .select(
+      [
+        "product_id",
+        "product_name_raw",
+        "product_name_matched",
+        "qty_sold",
+        "gross_amount",
+      ].join(",")
+    )
+    .eq("user_id", userId)
+    .eq("marketplace_id", input.marketplaceId)
+    .in("settlement_id", settlementIds)
+
+  if (lErr) throw lErr
+
+  // 5) 상품명 기준 집계
+  const agg = new Map<
+    string,
+    {
+      productId: string | null
+      productName: string
+      qtySoldSum: number
+      grossAmountSum: number
+    }
+  >()
+
+  for (const row of lines ?? []) {
+    const productName =
+      String((row as any).product_name_matched ?? (row as any).product_name_raw ?? "상품").trim() || "상품"
+
+    const productId = (row as any).product_id ? String((row as any).product_id) : null
+    const qtySold = Number((row as any).qty_sold ?? 0) || 0
+    const grossAmount = Number((row as any).gross_amount ?? 0) || 0
+
+    const current =
+      agg.get(productName) ?? {
+        productId,
+        productName,
+        qtySoldSum: 0,
+        grossAmountSum: 0,
+      }
+
+    current.qtySoldSum += qtySold
+    current.grossAmountSum += grossAmount
+
+    if (!current.productId && productId) {
+      current.productId = productId
+    }
+
+    agg.set(productName, current)
+  }
+
+  // 6) 저장
+  const rows = Array.from(agg.values()).map((row) => ({
+    user_id: userId,
+    marketplace_id: input.marketplaceId,
+    period_month: input.periodMonth,
+    product_id: row.productId,
+    product_name: row.productName,
+    qty_sold_sum: row.qtySoldSum,
+    gross_amount_sum: row.grossAmountSum,
+    updated_at: new Date().toISOString(),
+  }))
+
+  if (rows.length === 0) return
+
+  const { error: insErr } = await supabase
+    .from("settlement_product_stats")
+    .upsert(rows, {
+      onConflict: "user_id,marketplace_id,period_month,product_name",
+    })
+
+  if (insErr) throw insErr
+}
+
+export async function listSettlementProductStatsDB(input: {
+  periodMonth: string
+  marketplaceId?: string
+}) {
+  const userId = await requireUserId()
+
+  let q = supabase
+    .from("settlement_product_stats")
+    .select(
+      [
+        "id",
+        "user_id",
+        "marketplace_id",
+        "period_month",
+        "product_id",
+        "product_name",
+        "qty_sold_sum",
+        "gross_amount_sum",
+        "updated_at",
+      ].join(",")
+    )
+    .eq("user_id", userId)
+    .eq("period_month", input.periodMonth)
+    .order("qty_sold_sum", { ascending: false })
+    .order("gross_amount_sum", { ascending: false })
+
+  if (input.marketplaceId) {
+    q = q.eq("marketplace_id", input.marketplaceId)
+  }
+
+  const { data, error } = await q
+  if (error) throw error
+  return data ?? []
 }
 
 /* =========================
@@ -642,9 +754,9 @@ export async function createProductDB(p: Product): Promise<void> {
     { onConflict: "user_id,id" }
   )
   if (error) throw error
-
+  console.time("[perf] stores")
   const { data: stores } = await supabase.from("stores").select("id").eq("user_id", userId)
-
+  console.timeEnd("[perf] stores")
   await ensureStoreProductStatesSeedDB({
     storeIds: (stores ?? []).map((s: any) => s.id),
     productIds: [p.id],
@@ -686,16 +798,18 @@ export async function createStoreDB(s: Store): Promise<void> {
     { onConflict: "user_id,id" }
   )
   if (error) throw error
-
+  console.time("[perf] products")
   const { data: products } = await supabase
     .from("products")
     .select("id")
     .eq("user_id", userId)
+  console.timeEnd("[perf] products")
 
   await ensureStoreProductStatesSeedDB({
     storeIds: [s.id],
     productIds: (products ?? []).map((p: any) => p.id),
   })
+  
 }
 
 export async function updateStoreDB(s: Store): Promise<void> {
@@ -933,12 +1047,16 @@ export async function getSettlementDetailDB(input: {
 }): Promise<{ settlement: DBSettlement; lines: DBSettlementLine[] }> {
   const userId = await requireUserId()
 
+  console.time("[perf] settlements_v2")
+
   const { data: settlement, error: sErr } = await supabase
     .from("settlements_v2")
     .select("*")
     .eq("user_id", userId)
     .eq("id", input.settlementId)
     .single()
+
+    console.time("[perf] settlements_v2")
 
   if (sErr) throw sErr
 
@@ -1001,12 +1119,18 @@ export async function restoreInventoryFromSettlementV2DB(input: {
   const userId = await requireUserId()
 
   // 1) settlement 로드
+
+  console.time("[perf] settlements_v2")
+  
   const { data: settlement, error: sErr } = await supabase
     .from("settlements_v2")
     .select("id,user_id,marketplace_id,apply_to_inventory")
     .eq("user_id", userId)
     .eq("id", input.settlementId)
     .single()
+
+  console.timeEnd("[perf] settlements_v2")
+
   if (sErr) throw sErr
 
   // 적용 안 된 정산이면 복원하지 않음
@@ -1038,6 +1162,8 @@ export async function restoreInventoryFromSettlementV2DB(input: {
   const productIds = Array.from(agg.keys())
 
   // 4) inventory 현재값을 한 번에 조회 (IN)
+  console.time("[perf] inventory")
+
   const { data: invRows, error: invErr } = await supabase
     .from("inventory")
     .select("product_id,on_hand_qty")
@@ -1045,6 +1171,8 @@ export async function restoreInventoryFromSettlementV2DB(input: {
     .eq("store_id", storeId)
     .in("product_id", productIds)
 
+  console.timeEnd("[perf] inventory")
+  
   if (invErr) throw invErr
 
   const currentByPid = new Map<string, number>(

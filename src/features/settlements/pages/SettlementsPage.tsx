@@ -21,6 +21,8 @@ import {
   deleteSettlementV2DB,
   listSettlementLinesV2DB,
   upsertInventoryItemDB,
+  recomputeSettlementProductStatsDB,
+  listSettlementProductStatsDB,
 } from "@/data/store.supabase"
 
 import { toast } from "@/lib/toast"
@@ -120,9 +122,15 @@ export default function SettlementsPage() {
     }
   }, [month, storeId])
 
+  const handleSettlementSaved = useCallback(async () => {
+    await a.refresh()
+    await load()
+  }, [a, load])
+
   useEffect(() => {
     load()
   }, [load])
+
 
   const openDetail = async (settlementId: string) => {
     // 같은 행 다시 클릭하면 닫기
@@ -161,7 +169,7 @@ export default function SettlementsPage() {
       setDetail(null)
     }
 
-    ;(async () => {
+    ; (async () => {
       try {
         const loadingId = (toast as any).loading?.("삭제 중...")
 
@@ -193,6 +201,11 @@ export default function SettlementsPage() {
         }
 
         await deleteSettlementV2DB({ settlementId: deletingId })
+
+        await recomputeSettlementProductStatsDB({
+          marketplaceId: target.storeId,
+          periodMonth: target.month,
+        })
 
         if (loadingId) (toast as any).dismiss?.(loadingId)
         toast.success(target.applyToInventory && restore ? "삭제 완료 (재고 복원됨)" : "정산 데이터가 삭제되었습니다.")
@@ -240,7 +253,7 @@ export default function SettlementsPage() {
       </div>
 
       {/* 업로드 */}
-      <SettlementUploader />
+      <SettlementUploader onSaved={handleSettlementSaved} />
 
       {/* 저장된 정산(v2) 조회 */}
       <AppCard
@@ -250,36 +263,36 @@ export default function SettlementsPage() {
         action={
           <div className="flex flex-wrap items-center gap-2">
             {/* Year */}
-<select
-  className="h-9 rounded-md border bg-background px-2 text-sm"
-  value={selectedYear}
-  onChange={(e) => {
-    const nextYear = e.target.value
-    setMonth(`${nextYear}-${selectedMonthNum}`)
-  }}
->
-  {yearOptions(6).map((y) => (
-    <option key={y} value={y}>
-      {y}년
-    </option>
-  ))}
-</select>
+            <select
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              value={selectedYear}
+              onChange={(e) => {
+                const nextYear = e.target.value
+                setMonth(`${nextYear}-${selectedMonthNum}`)
+              }}
+            >
+              {yearOptions(6).map((y) => (
+                <option key={y} value={y}>
+                  {y}년
+                </option>
+              ))}
+            </select>
 
-{/* Month */}
-<select
-  className="h-9 rounded-md border bg-background px-2 text-sm"
-  value={selectedMonthNum}
-  onChange={(e) => {
-    const nextMm = e.target.value
-    setMonth(`${selectedYear}-${nextMm}`)
-  }}
->
-  {monthNumOptions().map((m) => (
-    <option key={m.value} value={m.value}>
-      {m.label}
-    </option>
-  ))}
-</select>
+            {/* Month */}
+            <select
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              value={selectedMonthNum}
+              onChange={(e) => {
+                const nextMm = e.target.value
+                setMonth(`${selectedYear}-${nextMm}`)
+              }}
+            >
+              {monthNumOptions().map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
 
             <select
               className="h-9 rounded-md border bg-background px-2 text-sm"
@@ -468,11 +481,11 @@ export default function SettlementsPage() {
 
 function TopProductsMiniCard(props: {
   month: string
-  storeId: string // "" = 전체
-  items: any[] // listSettlementsDB 결과
+  storeId: string
+  items: any[]
   storeNameById: Map<string, string>
 }) {
-  const { month, storeId, items, storeNameById } = props
+  const { month, storeId, storeNameById } = props
 
   const [openKey, setOpenKey] = useState<string>("")
   const [busy, setBusy] = useState(false)
@@ -482,56 +495,44 @@ function TopProductsMiniCard(props: {
       name: string
       qty: number
       gross: number
-      byMarketplace: Array<{ marketplaceId: string; marketplaceName: string; qty: number; gross: number }>
+      byMarketplace: Array<{
+        marketplaceId: string
+        marketplaceName: string
+        qty: number
+        gross: number
+      }>
     }>
   >([])
-  const [truncated, setTruncated] = useState(false)
 
   useEffect(() => {
     let cancelled = false
 
-    ;(async () => {
-      try {
-        setBusy(true)
-        setErr("")
-        setRows([])
-        setTruncated(false)
-        setOpenKey("")
+      ; (async () => {
+        try {
+          setBusy(true)
+          setErr("")
+          setRows([])
+          setOpenKey("")
 
-        const MAX_SETTLEMENTS = 12
-        const target = items.slice(0, MAX_SETTLEMENTS)
-        if (items.length > MAX_SETTLEMENTS) setTruncated(true)
-
-        if (target.length === 0) {
-          if (!cancelled) setRows([])
-          return
-        }
-
-        // settlement별 marketplace_id를 묶어서 lines를 가져온다
-        const linesList = await Promise.all(
-          target.map(async (s) => {
-            const lines = await listSettlementLinesV2DB({ settlementId: String(s.id) })
-            const mid = String((s as any).marketplace_id ?? "")
-            return { mid, lines }
+          const stats = await listSettlementProductStatsDB({
+            periodMonth: month,
+            marketplaceId: storeId || undefined,
           })
-        )
 
-        const agg = new Map<
-          string,
-          {
-            qty: number
-            gross: number
-            by: Map<string, { qty: number; gross: number }>
-          }
-        >()
+          const agg = new Map<
+            string,
+            {
+              qty: number
+              gross: number
+              by: Map<string, { qty: number; gross: number }>
+            }
+          >()
 
-        for (const pack of linesList) {
-          const mid = pack.mid
-          for (const l of pack.lines ?? []) {
-            const name =
-              String((l as any).product_name_matched ?? (l as any).product_name_raw ?? "상품").trim() || "상품"
-            const qty = Number((l as any).qty_sold ?? 0) || 0
-            const gross = Number((l as any).gross_amount ?? 0) || 0
+          for (const row of stats ?? []) {
+            const name = String((row as any).product_name ?? "상품").trim() || "상품"
+            const mid = String((row as any).marketplace_id ?? "")
+            const qty = Number((row as any).qty_sold_sum ?? 0) || 0
+            const gross = Number((row as any).gross_amount_sum ?? 0) || 0
 
             const cur =
               agg.get(name) ??
@@ -542,42 +543,55 @@ function TopProductsMiniCard(props: {
 
             if (mid) {
               const curBy = cur.by.get(mid) ?? { qty: 0, gross: 0 }
-              cur.by.set(mid, { qty: curBy.qty + qty, gross: curBy.gross + gross })
+              cur.by.set(mid, {
+                qty: curBy.qty + qty,
+                gross: curBy.gross + gross,
+              })
             }
 
             agg.set(name, cur)
           }
+
+          const out = Array.from(agg.entries())
+            .map(([name, v]) => {
+              const byMarketplace = Array.from(v.by.entries())
+                .map(([marketplaceId, mv]) => ({
+                  marketplaceId,
+                  marketplaceName: String(storeNameById.get(marketplaceId) ?? marketplaceId),
+                  qty: mv.qty,
+                  gross: mv.gross,
+                }))
+                .sort((a, b) => b.qty - a.qty)
+                .slice(0, 5)
+
+              return {
+                name,
+                qty: v.qty,
+                gross: v.gross,
+                byMarketplace,
+              }
+            })
+            .sort((a, b) => b.qty - a.qty)
+            .slice(0, 5)
+
+          if (!cancelled) {
+            setRows(out)
+          }
+        } catch (e: any) {
+          if (!cancelled) {
+            setErr(e?.message ?? String(e))
+          }
+        } finally {
+          if (!cancelled) {
+            setBusy(false)
+          }
         }
-
-        const out = Array.from(agg.entries())
-          .map(([name, v]) => {
-            const byMarketplace = Array.from(v.by.entries())
-              .map(([marketplaceId, mv]) => ({
-                marketplaceId,
-                marketplaceName: String(storeNameById.get(marketplaceId) ?? marketplaceId),
-                qty: mv.qty,
-                gross: mv.gross,
-              }))
-              .sort((a, b) => b.qty - a.qty)
-              .slice(0, 5)
-
-            return { name, qty: v.qty, gross: v.gross, byMarketplace }
-          })
-          .sort((a, b) => b.qty - a.qty)
-          .slice(0, 5)
-
-        if (!cancelled) setRows(out)
-      } catch (e: any) {
-        if (!cancelled) setErr(e?.message ?? String(e))
-      } finally {
-        if (!cancelled) setBusy(false)
-      }
-    })()
+      })()
 
     return () => {
       cancelled = true
     }
-  }, [month, storeId, items, storeNameById])
+  }, [month, storeId, storeNameById])
 
   const scopeLabel =
     storeId && storeId.trim()
@@ -587,21 +601,30 @@ function TopProductsMiniCard(props: {
   return (
     <AppCard title="베스트 상품 TOP" description={`판매 수량 기준 · ${scopeLabel}`}>
       {busy ? <Skeleton className="h-24" /> : null}
-      {err ? <ErrorState title="베스트 상품을 불러오지 못했습니다." message={err} /> : null}
+      {err ? (
+        <ErrorState
+          title="베스트 상품을 불러오지 못했습니다."
+          message={err}
+        />
+      ) : null}
 
       {!busy && !err ? (
         rows.length === 0 ? (
-          <EmptyState title="표시할 상품 데이터가 없습니다." description="이 월/입점처에 판매 라인이 없어요." />
+          <EmptyState
+            title="표시할 상품 데이터가 없습니다."
+            description="이 월/입점처에 판매 라인이 없어요."
+          />
         ) : (
           <div className="space-y-2">
             {rows.map((r, idx) => {
               const opened = openKey === r.name
+
               return (
                 <div key={`${r.name}-${idx}`} className="rounded-lg border bg-background">
                   <button
                     type="button"
                     onClick={() => setOpenKey(opened ? "" : r.name)}
-                    className="w-full px-3 py-2 text-left hover:bg-accent/20 rounded-lg"
+                    className="w-full rounded-lg px-3 py-2 text-left hover:bg-accent/20"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -610,21 +633,29 @@ function TopProductsMiniCard(props: {
                           {fmtKRW(r.gross)}원 · {r.qty.toLocaleString()}개
                         </div>
                       </div>
+
                       <div className="shrink-0">
-                        <AppBadge variant={idx === 0 ? "default" : "muted"}>#{idx + 1}</AppBadge>
+                        <AppBadge variant={idx === 0 ? "default" : "muted"}>
+                          #{idx + 1}
+                        </AppBadge>
                       </div>
                     </div>
                   </button>
 
                   {opened ? (
-                    <div className="px-3 pb-3">
+                    <div className="border-t px-3 pb-3 pt-2">
                       <div className="mb-2 text-xs text-muted-foreground">입점처별 판매</div>
                       <div className="space-y-2">
                         {r.byMarketplace.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">입점처 정보가 없습니다.</div>
+                          <div className="text-sm text-muted-foreground">
+                            입점처 정보가 없습니다.
+                          </div>
                         ) : (
                           r.byMarketplace.map((b) => (
-                            <div key={b.marketplaceId} className="flex items-center justify-between text-sm">
+                            <div
+                              key={b.marketplaceId}
+                              className="flex items-center justify-between text-sm"
+                            >
                               <div className="truncate">{b.marketplaceName}</div>
                               <div className="tabular-nums text-muted-foreground">
                                 {b.qty.toLocaleString()}개 · {fmtKRW(b.gross)}원
@@ -638,12 +669,6 @@ function TopProductsMiniCard(props: {
                 </div>
               )
             })}
-
-            {truncated ? (
-              <div className="text-xs text-muted-foreground">
-                참고: 정산이 많아 상위 {12}개 정산만 집계했어요.
-              </div>
-            ) : null}
           </div>
         )
       ) : null}

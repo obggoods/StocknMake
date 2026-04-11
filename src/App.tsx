@@ -2,8 +2,9 @@
 import { Suspense, lazy, useEffect, useState } from "react"
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
 import type { Session } from "@supabase/supabase-js"
-
+import Pricing from "@/pages_legacy/Pricing"
 import "./App.css"
+import AppLoadingScreen from "@/components/shared/AppLoadingScreen"
 
 import AppLayout from "./app/layout/AppLayout"
 
@@ -18,7 +19,7 @@ const LoginPage = lazy(() => import("./pages_legacy/Login"))
 const InviteGatePage = lazy(() => import("./pages_legacy/InviteGate"))
 const InventoryPage = lazy(() => import("./features/inventory/pages/InventoryPage"))
 
-import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient"
+import { supabase, getOrCreateMyProfile, getMyBilling } from "./lib/supabaseClient"
 
 type MyProfile = {
   is_invited?: boolean
@@ -36,6 +37,10 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [adminChecked, setAdminChecked] = useState(false)
 
+  const [billingLoaded, setBillingLoaded] = useState(false)
+  const [billingPlan, setBillingPlan] = useState<"free" | "basic" | "premium">("free")
+  const [isPaidUser, setIsPaidUser] = useState(false)
+
   // ✅ 0) 세션 부트스트랩 + Auth 상태 변화 구독
   useEffect(() => {
     let alive = true
@@ -51,6 +56,9 @@ export default function App() {
       setProfile(null)
       setIsAdmin(false)
       setAdminChecked(false)
+      setBillingLoaded(false)
+      setBillingPlan("free")
+      setIsPaidUser(false)
     })
 
     return () => {
@@ -63,22 +71,58 @@ export default function App() {
   useEffect(() => {
     let alive = true
 
-    ;(async () => {
-      if (!session) return
+      ; (async () => {
+        if (!session) return
 
-      try {
-        setProfileLoading(true)
-        const p = await getOrCreateMyProfile()
-        if (!alive) return
-        setProfile(p as MyProfile)
-      } catch (e) {
-        console.error("[App] profile load failed", e)
-        if (!alive) return
-        setProfile({ is_invited: false })
-      } finally {
-        if (alive) setProfileLoading(false)
-      }
-    })()
+        try {
+          setProfileLoading(true)
+          const p = await getOrCreateMyProfile()
+          if (!alive) return
+          setProfile(p as MyProfile)
+        } catch (e) {
+          console.error("[App] profile load failed", e)
+          if (!alive) return
+          setProfile({ is_invited: false })
+        } finally {
+          if (alive) setProfileLoading(false)
+        }
+      })()
+
+    return () => {
+      alive = false
+    }
+  }, [session])
+
+  // ✅ 1.5) 로그인 상태에서만 billing 로드
+  useEffect(() => {
+    let alive = true
+
+      ; (async () => {
+        if (!session) {
+          if (!alive) return
+          setBillingPlan("free")
+          setIsPaidUser(false)
+          setBillingLoaded(true)
+          return
+        }
+
+        try {
+          setBillingLoaded(false)
+          const billing = await getMyBilling()
+          if (!alive) return
+
+          setBillingPlan(billing.plan_tier)
+          setIsPaidUser(billing.is_paid)
+        } catch (e) {
+          console.error("[App] billing load failed", e)
+          if (!alive) return
+
+          setBillingPlan("free")
+          setIsPaidUser(false)
+        } finally {
+          if (alive) setBillingLoaded(true)
+        }
+      })()
 
     return () => {
       alive = false
@@ -89,57 +133,60 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
 
-    ;(async () => {
-      if (!session) {
-        if (!cancelled) {
-          setIsAdmin(false)
-          setAdminChecked(true)
+      ; (async () => {
+        if (!session) {
+          if (!cancelled) {
+            setIsAdmin(false)
+            setAdminChecked(true)
+          }
+          return
         }
-        return
-      }
 
-      const { data, error } = await supabase.rpc("is_admin")
-      if (cancelled) return
+        const { data, error } = await supabase.rpc("is_admin")
+        if (cancelled) return
 
-      setIsAdmin(!error && !!data)
-      setAdminChecked(true)
-    })()
+        setIsAdmin(!error && !!data)
+        setAdminChecked(true)
+      })()
 
     return () => {
       cancelled = true
     }
   }, [session])
 
-  if (bootLoading) return <div className="app-loading">로딩 중...</div>
+  if (bootLoading) {
+    return <AppLoadingScreen message="서비스를 준비하고 있어요" />
+  }
 
   if (!session) {
     return (
-      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+      <Suspense fallback={<AppLoadingScreen message="로그인 화면을 불러오고 있어요" />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Suspense>
     )
-  }  
+  }
 
   // ✅ 4) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
-  if (profileLoading || !profile || !adminChecked) {
-    return <div className="app-loading">초대 여부 확인 중…</div>
+  if (profileLoading || !profile || !adminChecked || !billingLoaded) {
+    return <AppLoadingScreen message="초대 여부를 확인하고 있어요" />
   }
 
   if (!isAdmin && profile.is_invited !== true) {
     return (
-      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+      <Suspense fallback={<AppLoadingScreen message="화면을 불러오고 있어요" />}>
         <Routes>
           <Route path="/invite" element={<InviteGatePage />} />
           <Route path="*" element={<Navigate to="/invite" replace />} />
         </Routes>
       </Suspense>
     )
-  }  
+  }
 
   // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
+
   return (
     <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
       <Routes>
@@ -148,6 +195,7 @@ export default function App() {
             <AppLayout
               sessionEmail={session.user.email ?? ""}
               isAdmin={isAdmin}
+              billingPlan={billingPlan}
               onLogout={async () => {
                 await supabase.auth.signOut()
                 nav("/login")
@@ -163,24 +211,25 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/margin" element={<MarginCalculatorPage />} />
           <Route path="/settlements" element={<SettlementsPage />} />
+          <Route path="/pricing" element={<Pricing />} />
           <Route
-  path="/invite"
-  element={
-    !isAdmin && profile.is_invited !== true ? (
-      <InviteGatePage />
-    ) : (
-      <Navigate to="/dashboard" replace />
-    )
-  }
-/>
+            path="/invite"
+            element={
+              !isAdmin && profile.is_invited !== true ? (
+                <InviteGatePage />
+              ) : (
+                <Navigate to="/dashboard" replace />
+              )
+            }
+          />
           {/* Admin */}
-<Route
-  path="/admin/invites"
-  element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
-/>
+          <Route
+            path="/admin/invites"
+            element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
+          />
 
-{/* (임시) /admin/users로 들어오면 invites로 보내기 */}
-<Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
+          {/* (임시) /admin/users로 들어오면 invites로 보내기 */}
+          <Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
 
           {/* Backward compat */}
           <Route path="/master" element={<Navigate to="/products" replace />} />

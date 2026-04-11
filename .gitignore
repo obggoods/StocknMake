@@ -15,3 +15,8 @@ build
 
 backup.sql
 backups/
+.vercel
+.env*.local
+
+node_modules
+.env.local

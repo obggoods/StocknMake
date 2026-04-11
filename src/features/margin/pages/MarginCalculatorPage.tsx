@@ -129,11 +129,11 @@ function migrateProduct(p: any): Product {
 
     materials: Array.isArray(p?.materials)
       ? p.materials.map((m: any) => ({
-          id: typeof m?.id === "string" && isUuid(m.id) ? m.id : uuid(),
-          name: String(m?.name ?? ""),
-          unitPrice: clamp(Number(m?.unitPrice ?? m?.cost ?? 0), 0),
-          quantity: clamp(Number(m?.quantity ?? 1), 0.0001),
-        }))
+        id: typeof m?.id === "string" && isUuid(m.id) ? m.id : uuid(),
+        name: String(m?.name ?? ""),
+        unitPrice: clamp(Number(m?.unitPrice ?? m?.cost ?? 0), 0),
+        quantity: clamp(Number(m?.quantity ?? 1), 0.0001),
+      }))
       : [],
 
     hourlyRate: clamp(Number(p?.hourlyRate ?? 0), 0),
@@ -256,9 +256,15 @@ function assessMargin(marginRate: number): MarginAssessment {
 }
 
 function badgeClasses(level: MarginAssessment["level"]) {
-  if (level === "danger") return "bg-destructive/10 text-destructive border-destructive/20"
-  if (level === "warn") return "bg-amber-500/10 text-amber-700 border-amber-500/20 dark:text-amber-300"
-  return "bg-emerald-500/10 text-emerald-700 border-emerald-500/20 dark:text-emerald-300"
+  if (level === "danger") {
+    return "bg-destructive/10 text-destructive border-destructive/20"
+  }
+
+  if (level === "warn") {
+    return "bg-warning/10 text-warning border-warning/20"
+  }
+
+  return "bg-success/10 text-success border-success/20"
 }
 
 export default function MarginCalculatorPage() {
@@ -290,55 +296,55 @@ export default function MarginCalculatorPage() {
   useEffect(() => {
     let alive = true
 
-    ;(async () => {
-      try {
-        setLoading(true)
-        setLoadError(null)
+      ; (async () => {
+        try {
+          setLoading(true)
+          setLoadError(null)
 
-        const [pRows, lRows] = await Promise.all([
-          listMyMarginProducts(),
-          listMyMaterialLibrary(),
-        ])
+          const [pRows, lRows] = await Promise.all([
+            listMyMarginProducts(),
+            listMyMaterialLibrary(),
+          ])
 
-        if (!alive) return
+          if (!alive) return
 
-        const p = (pRows ?? []).map((row: any) => {
-          // row.data 안에 Product 형태를 저장하고, row.id를 최종 id로 사용
-          const base = migrateProduct(row.data ?? {})
-          return {
-            ...base,
-            id: row.id,
-            name: row.name ?? base.name,
-            memo: row.memo ?? base.memo ?? "",
-            createdAt: base.createdAt ?? Date.now(),
-          } as Product
-        })
+          const p = (pRows ?? []).map((row: any) => {
+            // row.data 안에 Product 형태를 저장하고, row.id를 최종 id로 사용
+            const base = migrateProduct(row.data ?? {})
+            return {
+              ...base,
+              id: row.id,
+              name: row.name ?? base.name,
+              memo: row.memo ?? base.memo ?? "",
+              createdAt: base.createdAt ?? Date.now(),
+            } as Product
+          })
 
-        const l = (lRows ?? []).map((row: any) => {
-          const updatedAt = row.updated_at ? new Date(row.updated_at).getTime() : Date.now()
-          return {
-            id: row.id,
-            name: String(row.name ?? "").trim(),
-            unitPrice: clamp(Number(row.unit_price ?? 0), 0),
-            updatedAt,
-          } as LibraryItem
-        })
+          const l = (lRows ?? []).map((row: any) => {
+            const updatedAt = row.updated_at ? new Date(row.updated_at).getTime() : Date.now()
+            return {
+              id: row.id,
+              name: String(row.name ?? "").trim(),
+              unitPrice: clamp(Number(row.unit_price ?? 0), 0),
+              updatedAt,
+            } as LibraryItem
+          })
 
-        setProducts(p)
-        setLibrary(l)
+          setProducts(p)
+          setLibrary(l)
 
-        // lib edit input init
-        const init: Record<string, string> = {}
-        l.forEach((it) => (init[it.id] = String(it.unitPrice)))
-        setLibUnitPriceEdit(init)
-      } catch (e: any) {
-        if (!alive) return
-        setLoadError(e?.message ?? "데이터를 불러오지 못했습니다.")
-      } finally {
-        if (!alive) return
-        setLoading(false)
-      }
-    })()
+          // lib edit input init
+          const init: Record<string, string> = {}
+          l.forEach((it) => (init[it.id] = String(it.unitPrice)))
+          setLibUnitPriceEdit(init)
+        } catch (e: any) {
+          if (!alive) return
+          setLoadError(e?.message ?? "데이터를 불러오지 못했습니다.")
+        } finally {
+          if (!alive) return
+          setLoading(false)
+        }
+      })()
 
     return () => {
       alive = false
@@ -675,33 +681,33 @@ export default function MarginCalculatorPage() {
                         <div className="space-y-2 md:col-span-2">
                           <Label>이름</Label>
                           <AppInput
-  className="w-full h-8 px-2 text-sm"
-  value={newMaterialName}
-  onChange={(e) => setNewMaterialName(e.target.value)}
-  placeholder="예: 원단"
-/>
+                            className="w-full h-8 px-2 text-sm"
+                            value={newMaterialName}
+                            onChange={(e) => setNewMaterialName(e.target.value)}
+                            placeholder="예: 원단"
+                          />
                         </div>
 
                         <div className="space-y-2">
                           <Label>단가</Label>
                           <AppInput
-  className="w-full h-8 px-2 text-sm"
-  inputMode="numeric"
-  value={newMaterialUnitPrice}
-  onChange={(e) => setNewMaterialUnitPrice(e.target.value)}
-  placeholder="예: 2500"
-/>
+                            className="w-full h-8 px-2 text-sm"
+                            inputMode="numeric"
+                            value={newMaterialUnitPrice}
+                            onChange={(e) => setNewMaterialUnitPrice(e.target.value)}
+                            placeholder="예: 2500"
+                          />
                         </div>
 
                         <div className="space-y-2">
                           <Label>수량</Label>
                           <AppInput
-  className="w-full h-8 px-2 text-sm"
-  inputMode="decimal"
-  value={newMaterialQty}
-  onChange={(e) => setNewMaterialQty(e.target.value)}
-  placeholder="예: 0.5"
-/>
+                            className="w-full h-8 px-2 text-sm"
+                            inputMode="decimal"
+                            value={newMaterialQty}
+                            onChange={(e) => setNewMaterialQty(e.target.value)}
+                            placeholder="예: 0.5"
+                          />
                         </div>
                       </div>
 
@@ -767,98 +773,98 @@ export default function MarginCalculatorPage() {
 
                       {draft.materials.length ? (
                         <div className="rounded-lg border overflow-hidden">
-                        <Table className="w-full table-fixed">
-                        <colgroup>
-  <col style={{ width: "48%" }} />   {/* 이름 ↑ */}
-  <col style={{ width: "80px" }} />  {/* 단가 ↓ */}
-  <col style={{ width: "48px" }} />  {/* 수량 ↓ */}
-  <col style={{ width: "80px" }} />  {/* 합계 (유지) */}
-  <col style={{ width: "72px" }} />  {/* 라이브러리 ↓ */}
-  <col style={{ width: "44px" }} />  {/* 삭제 ↓ */}
-</colgroup>
+                          <Table className="w-full table-fixed">
+                            <colgroup>
+                              <col style={{ width: "48%" }} />   {/* 이름 ↑ */}
+                              <col style={{ width: "80px" }} />  {/* 단가 ↓ */}
+                              <col style={{ width: "48px" }} />  {/* 수량 ↓ */}
+                              <col style={{ width: "80px" }} />  {/* 합계 (유지) */}
+                              <col style={{ width: "72px" }} />  {/* 라이브러리 ↓ */}
+                              <col style={{ width: "44px" }} />  {/* 삭제 ↓ */}
+                            </colgroup>
 
-  <TableHeader>
-    <TableRow>
-      <TableHead>이름</TableHead>
-      <TableHead>단가</TableHead>
-      <TableHead>수량</TableHead>
-      <TableHead className="text-right">합계</TableHead>
-      <TableHead className="text-right">라이브러리</TableHead>
-      <TableHead />
-    </TableRow>
-  </TableHeader>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>이름</TableHead>
+                                <TableHead>단가</TableHead>
+                                <TableHead>수량</TableHead>
+                                <TableHead className="text-right">합계</TableHead>
+                                <TableHead className="text-right">라이브러리</TableHead>
+                                <TableHead />
+                              </TableRow>
+                            </TableHeader>
 
-  <TableBody>
-    {draft.materials.map((m) => {
-      const total = (m.unitPrice || 0) * (m.quantity || 0)
-      return (
-        <TableRow key={m.id}>
-          <TableCell className="py-2 px-2">
-            <AppInput
-              className="w-full h-8 px-2 text-sm"
-              value={m.name}
-              placeholder="예: 원단"
-              onChange={(e) => updateMaterial(m.id, { name: e.target.value })}
-            />
-          </TableCell>
+                            <TableBody>
+                              {draft.materials.map((m) => {
+                                const total = (m.unitPrice || 0) * (m.quantity || 0)
+                                return (
+                                  <TableRow key={m.id}>
+                                    <TableCell className="py-2 px-2">
+                                      <AppInput
+                                        className="w-full h-8 px-2 text-sm"
+                                        value={m.name}
+                                        placeholder="예: 원단"
+                                        onChange={(e) => updateMaterial(m.id, { name: e.target.value })}
+                                      />
+                                    </TableCell>
 
-          <TableCell className="py-2 px-2">
-            <AppInput
-              className="w-full h-8 px-2 text-sm"
-              inputMode="numeric"
-              value={String(m.unitPrice)}
-              onChange={(e) =>
-                updateMaterial(m.id, { unitPrice: clamp(toNumber(e.target.value), 0) })
-              }
-            />
-          </TableCell>
+                                    <TableCell className="py-2 px-2">
+                                      <AppInput
+                                        className="w-full h-8 px-2 text-sm"
+                                        inputMode="numeric"
+                                        value={String(m.unitPrice)}
+                                        onChange={(e) =>
+                                          updateMaterial(m.id, { unitPrice: clamp(toNumber(e.target.value), 0) })
+                                        }
+                                      />
+                                    </TableCell>
 
-          <TableCell className="py-2 px-2">
-          <AppInput
-  className="w-full h-8 px-2 text-sm text-center"
-  inputMode="decimal"
-  value={String(Number(m.quantity) || 0)}   // ✅ 무조건 숫자 문자열로 렌더링
-  onChange={(e) => {
-    const n = clamp(toNumber(e.target.value), 0.0001)
-    updateMaterial(m.id, { quantity: n })    // ✅ state에는 number만 저장
-  }}
-/>
-          </TableCell>
+                                    <TableCell className="py-2 px-2">
+                                      <AppInput
+                                        className="w-full h-8 px-2 text-sm text-center"
+                                        inputMode="decimal"
+                                        value={String(Number(m.quantity) || 0)}   // ✅ 무조건 숫자 문자열로 렌더링
+                                        onChange={(e) => {
+                                          const n = clamp(toNumber(e.target.value), 0.0001)
+                                          updateMaterial(m.id, { quantity: n })    // ✅ state에는 number만 저장
+                                        }}
+                                      />
+                                    </TableCell>
 
-          <TableCell className="py-2 px-2 text-right text-sm">
-            {formatCurrency(total)}
-          </TableCell>
+                                    <TableCell className="py-2 px-2 text-right text-sm">
+                                      {formatCurrency(total)}
+                                    </TableCell>
 
-          <TableCell className="py-2 px-2 text-center align-middle">
-  {libraryNameSet.has(normName(m.name)) ? (
-    <Check className="h-4 w-4 text-muted-foreground inline-block" />
-  ) : (
-    <button
-      type="button"
-      onClick={() => void addDraftMaterialToLibrary(m)}
-      title="라이브러리에 저장"
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-    >
-      <ArrowDownToLine className="h-4 w-4" />
-    </button>
-  )}
-</TableCell>
+                                    <TableCell className="py-2 px-2 text-center align-middle">
+                                      {libraryNameSet.has(normName(m.name)) ? (
+                                        <Check className="h-4 w-4 text-muted-foreground inline-block" />
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => void addDraftMaterialToLibrary(m)}
+                                          title="라이브러리에 저장"
+                                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                                        >
+                                          <ArrowDownToLine className="h-4 w-4" />
+                                        </button>
+                                      )}
+                                    </TableCell>
 
-          <TableCell className="py-2 px-2 text-center align-middle">
-          <button
-  type="button"
-  onClick={() => removeMaterial(m.id)}
-  title="삭제"
-  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-destructive focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
->
-  <Trash2 className="h-4 w-4" />
-</button>
-          </TableCell>
-        </TableRow>
-      )
-    })}
-  </TableBody>
-</Table>
+                                    <TableCell className="py-2 px-2 text-center align-middle">
+                                      <button
+                                        type="button"
+                                        onClick={() => removeMaterial(m.id)}
+                                        title="삭제"
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-destructive focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </TableCell>
+                                  </TableRow>
+                                )
+                              })}
+                            </TableBody>
+                          </Table>
                         </div>
                       ) : (
                         <div className="text-sm text-muted-foreground">재료를 추가하세요.</div>
@@ -883,8 +889,8 @@ export default function MarginCalculatorPage() {
 
                         <div className="space-y-2">
                           <Label>입력 방식</Label>
-                        {/* 좁은 폭/특정 줌에서 버튼이 겹치지 않도록 wrap */}
-                        <div className="flex flex-wrap gap-2">
+                          {/* 좁은 폭/특정 줌에서 버튼이 겹치지 않도록 wrap */}
+                          <div className="flex flex-wrap gap-2">
                             <AppButton
                               variant={draft.laborInputMode === "perHour" ? "default" : "secondary"}
                               size="sm"

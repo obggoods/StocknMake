@@ -43,12 +43,12 @@ const ITEMS_PER_PAGE = 20
 const COL = {
   select: "w-[44px]",
   category: "w-[110px]",
-  name: "w-[190px]",
-  price: "w-[80px]",
-  sku: "w-[120px]",
-  barcode: "w-[160px]",
-  status: "w-[160px]",
-  actions: "w-[72px]",
+  name: "w-[180px]",
+  price: "w-[88px]",
+  sku: "w-[110px]",
+  barcode: "w-[150px]",
+  status: "w-[140px]",
+  actions: "w-[96px]",
 } as const
 
 type LocalProduct = any
@@ -642,7 +642,7 @@ export default function ProductsManager() {
 
                     return (
                       <TableRow key={p.id}>
-                        <TableCell className={`${COL.select} align-top px-2 py-2 text-center`}>
+                        <TableCell className={`${COL.select} align-middle px-2 py-2 text-center`}>
                           <input
                             type="checkbox"
                             checked={checked}
@@ -650,16 +650,17 @@ export default function ProductsManager() {
                           />
                         </TableCell>
 
-                        <TableCell className={`${COL.category} align-top px-2 py-2 text-center`}>
+                        <TableCell className={`${COL.category} align-middle px-2 py-2 text-center`}>
                           {isEditing ? (
                             <AppSelect
-                              value={a.editingProductCategory || ""}
-                              onValueChange={(v) => a.setEditingProductCategory(v)}
-                              options={[
-                                { value: "", label: "미분류" },
-                                ...a.categories.map((name) => ({ value: name, label: name })),
-                              ]}
-                            />
+                            value={a.editingProductCategory || ""}
+                            onValueChange={(v) => a.setEditingProductCategory(v)}
+                            options={[
+                              { value: "", label: "미분류" },
+                              ...a.categories.map((name) => ({ value: name, label: name })),
+                            ]}
+                            className="flex items-center h-full"
+                          />
                           ) : (
                             <AppBadge variant="outline" className="max-w-[96px] truncate">
                               {p.category ? p.category : "미분류"}
@@ -667,13 +668,14 @@ export default function ProductsManager() {
                           )}
                         </TableCell>
 
-                        <TableCell className={`${COL.name} align-top px-2 py-2`}>
+                        <TableCell className={`${COL.name} align-middle px-2 py-2`}>
                           {isEditing ? (
                             <AppInput
-                              value={a.editingProductName}
-                              onChange={(e) => a.setEditingProductName(e.target.value)}
-                              placeholder="제품명"
-                            />
+                            className="flex items-center h-full"
+                            value={a.editingProductName}
+                            onChange={(e) => a.setEditingProductName(e.target.value)}
+                            placeholder="제품명"
+                          />
                           ) : (
                             <div className="min-w-0 flex items-center gap-2">
                               <div className="truncate text-sm font-medium">{p.name}</div>
@@ -686,50 +688,53 @@ export default function ProductsManager() {
                           )}
                         </TableCell>
 
-                        <TableCell className={`${COL.price} align-top px-1 py-2 text-right whitespace-nowrap`}>
+                        <TableCell className={`${COL.price} align-middle px-1 py-2 text-right whitespace-nowrap`}>
                           {isEditing ? (
                             <AppInput
-                              type="number"
-                              inputMode="numeric"
-                              value={String(editingPrice)}
-                              onChange={(e) => {
-                                const v = e.target.value
-                                setEditingPrice(v === "" ? 0 : Math.max(0, parseInt(v, 10) || 0))
-                              }}
-                              placeholder="0"
-                            />
+                            className="flex items-center h-full"
+                            type="number"
+                            inputMode="numeric"
+                            value={String(editingPrice)}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setEditingPrice(v === "" ? 0 : Math.max(0, parseInt(v, 10) || 0))
+                            }}
+                            placeholder="0"
+                          />
                           ) : (
                             <span className="tabular-nums">{(p.price ?? 0).toLocaleString("ko-KR")}</span>
                           )}
                         </TableCell>
 
-                        <TableCell className={`${COL.sku} align-top px-2 py-2 text-center`}>
+                        <TableCell className={`${COL.sku} align-middle px-2 py-2 text-center`}>
                           {isEditing ? (
                             <AppInput
-                              value={editingSku}
-                              onChange={(e) => setEditingSku(e.target.value)}
-                              placeholder="-"
-                            />
+                            className="flex items-center h-full"
+                            value={editingSku}
+                            onChange={(e) => setEditingSku(e.target.value)}
+                            placeholder="-"
+                          />
                           ) : (
                             <span className="truncate block">{p.sku ? p.sku : "-"}</span>
                           )}
                         </TableCell>
 
-                        <TableCell className={`${COL.barcode} align-top px-2 py-2 text-center`}>
+                        <TableCell className={`${COL.barcode} align-middle px-2 py-2 text-center`}>
                           {isEditing ? (
                             <AppInput
-                              value={editingBarcode}
-                              onChange={(e) => setEditingBarcode(e.target.value)}
-                              placeholder="-"
-                            />
+                            className="flex items-center h-full"
+                            value={editingBarcode}
+                            onChange={(e) => setEditingBarcode(e.target.value)}
+                            placeholder="-"
+                          />
                           ) : (
                             <span className="truncate block">{p.barcode ? p.barcode : "-"}</span>
                           )}
                         </TableCell>
 
-                        <TableCell className={`${COL.status} align-top px-2 py-2`}>
+                        <TableCell className={`${COL.status} align-middle px-2 py-2`}>
                           <div className="flex items-center justify-center gap-3">
-                            <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-2 whitespace-nowrap">
                               <AppSwitch
                                 checked={Boolean(p.active)}
                                 onCheckedChange={(v) => patchProduct(id, { active: Boolean(v) })}
@@ -738,7 +743,7 @@ export default function ProductsManager() {
                               <span className="text-[11px] text-muted-foreground select-none">판매</span>
                             </div>
 
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2 whitespace-nowrap">
                               <AppSwitch
                                 checked={p.makeEnabled !== false}
                                 onCheckedChange={(v) => patchProduct(id, { makeEnabled: Boolean(v) })}
@@ -749,13 +754,14 @@ export default function ProductsManager() {
                           </div>
                         </TableCell>
 
-                        <TableCell className={`${COL.actions} align-top px-2 py-2 text-right`}>
+                        <TableCell className={`${COL.actions} align-middle px-2 py-2 text-right`}>
                           {isEditing ? (
-                            <div className="flex justify-end gap-2">
+                            <div className="flex justify-end gap-1.5 whitespace-nowrap">
                               <AppButton
                                 type="button"
                                 variant="outline"
                                 size="sm"
+                                className="h-8 px-2.5 text-xs flex-shrink-0"
                                 onClick={() => {
                                   a.setEditingProductName(a.editingOriginalRef.current)
                                   a.setEditingProductCategory(a.editingOriginalCategoryRef.current)
@@ -771,6 +777,7 @@ export default function ProductsManager() {
                               <AppButton
                                 type="button"
                                 size="sm"
+                                className="h-8 px-2.5 text-xs flex-shrink-0"
                                 onClick={() => {
                                   patchProduct(id, {
                                     name: a.editingProductName,
