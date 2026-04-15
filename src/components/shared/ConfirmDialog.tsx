@@ -30,8 +30,13 @@ export function ConfirmDialog(props: {
   } = props
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      {open && (
+        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" />
+      )}
+      <DialogContent
+        className="sm:max-w-md fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50"
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>

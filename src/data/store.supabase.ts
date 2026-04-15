@@ -1243,6 +1243,49 @@ export async function upsertSettlementHeaderDB(input: {
   return data as DBSettlement
 }
 
+export async function createSettlementHeaderDB(input: {
+  marketplaceId: string
+  periodMonth: string
+  currency: string
+  grossAmount: number
+  commissionRate: number
+  commissionAmount: number
+  netAmount: number
+  rowsCount: number
+  sourceFilename: string | null
+  applyToInventory: boolean
+  settlementType?: "detailed" | "summary"
+}) {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError) throw userError
+  if (!user) throw new Error("로그인이 필요합니다.")
+
+  const { data, error } = await supabase
+    .from("settlements_v2")
+    .insert({
+      user_id: user.id, // ✅ 추가
+      marketplace_id: input.marketplaceId,
+      period_month: input.periodMonth,
+      currency: input.currency,
+      gross_amount: input.grossAmount,
+      commission_rate: input.commissionRate,
+      commission_amount: input.commissionAmount,
+      net_amount: input.netAmount,
+      rows_count: input.rowsCount,
+      source_filename: input.sourceFilename,
+      apply_to_inventory: input.applyToInventory,
+      settlement_type: input.settlementType ?? "detailed",
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
 export async function replaceSettlementLinesDB(input: {
   settlementId: string
   marketplaceId: string

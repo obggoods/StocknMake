@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Trash2 } from "lucide-react"
-
+import { supabase } from "@/lib/supabaseClient"
 import PageHeader from "@/app/layout/PageHeader"
 import SettlementUploader from "@/features/settlements/components/SettlementUploader"
+import MarginCalculatorPage from "@/features/margin/pages/MarginCalculatorPage"
 import MarketplacePerformance from "@/features/dashboard/components/MarketplacePerformance"
-
 import { AppCard } from "@/components/app/AppCard"
 import { AppButton } from "@/components/app/AppButton"
 import { AppBadge } from "@/components/app/AppBadge"
@@ -26,7 +26,12 @@ import {
 } from "@/data/store.supabase"
 
 import { toast } from "@/lib/toast"
-
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Table,
   TableBody,
@@ -77,14 +82,14 @@ export default function SettlementsPage() {
   })
   const { yy: selectedYear, mm: selectedMonthNum } = useMemo(() => splitYYYYMM(month), [month])
   const [storeId, setStoreId] = useState<string>("") // "" = 전체
-
+  const [marginProfiles, setMarginProfiles] = useState<any[]>([])
+  const [marginTargets, setMarginTargets] = useState<any[]>([])
   // 목록/상세
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>("")
   const [items, setItems] = useState<any[]>([])
   const [selectedId, setSelectedId] = useState<string>("")
   const [detail, setDetail] = useState<{ settlement: any; lines: any[] } | null>(null)
-
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -94,7 +99,9 @@ export default function SettlementsPage() {
     applyToInventory: boolean
   } | null>(null)
   const [restoreOnDelete, setRestoreOnDelete] = useState(true)
-
+  const [costPickerOpen, setCostPickerOpen] = useState(false)
+  const [targetLine, setTargetLine] = useState<any | null>(null)
+  const [createProfileOpen, setCreateProfileOpen] = useState(false)
   const stores = (a.data.stores ?? []) as any[]
 
   const storeNameById = useMemo(() => {
@@ -102,6 +109,94 @@ export default function SettlementsPage() {
     for (const s of stores) m.set(String(s.id), String(s.name ?? ""))
     return m
   }, [stores])
+
+  const productMap = useMemo(() => {
+    const m = new Map<string, any>()
+    for (const p of a.data.products ?? []) {
+      m.set(String(p.id), p)
+    }
+    return m
+  }, [a.data.products])
+
+  const profileMap = useMemo(() => {
+    const m = new Map<string, any>()
+    for (const p of marginProfiles) {
+      m.set(String(p.id), p)
+    }
+    return m
+  }, [marginProfiles])
+
+  const productCostMap = useMemo(() => {
+    const m = new Map<string, number>()
+
+    for (const t of marginTargets) {
+      if (t.target_type !== "product") continue
+
+      const profile = profileMap.get(String(t.profile_id))
+      if (!profile) continue
+
+      m.set(String(t.target_key), Number(profile.total_cost ?? 0))
+    }
+
+    return m
+  }, [marginTargets, profileMap])
+
+  const categoryCostMap = useMemo(() => {
+    const m = new Map<string, number>()
+
+    for (const t of marginTargets) {
+      if (t.target_type !== "category") continue
+
+      const profile = profileMap.get(String(t.profile_id))
+      if (!profile) continue
+
+      m.set(String(t.target_key), Number(profile.total_cost ?? 0))
+    }
+
+    return m
+  }, [marginTargets, profileMap])
+
+  const summary = useMemo(() => {
+    if (!detail?.lines) {
+      return {
+        totalCost: 0,
+        totalProfit: 0,
+        avgMarginRate: 0,
+        unmatched: 0,
+      }
+    }
+
+    let totalCost = 0
+    let totalProfit = 0
+    let totalRevenue = 0
+    let unmatched = 0
+
+    for (const l of detail.lines) {
+      const calc = calcNetProfit(
+        l,
+        productCostMap,
+        categoryCostMap,
+        productMap,
+        stores
+      )
+
+      totalCost += calc.cost
+      totalProfit += calc.profit
+      totalRevenue += Number(l.gross_amount ?? 0)
+
+      if (calc.matched === "none") {
+        unmatched++
+      }
+    }
+
+    return {
+      totalCost,
+      totalProfit,
+      avgMarginRate:
+        totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+      unmatched,
+    }
+  }, [detail, productCostMap, categoryCostMap, productMap, stores])
 
   const load = useCallback(async () => {
     try {
@@ -129,8 +224,27 @@ export default function SettlementsPage() {
 
   useEffect(() => {
     load()
+    loadMarginData()
   }, [load])
 
+  const loadMarginData = async () => {
+    const { data: userData } = await supabase.auth.getUser()
+    const user = userData.user
+    if (!user) return
+
+    const { data: profiles } = await supabase
+      .from("margin_profiles")
+      .select("*")
+      .eq("user_id", user.id)
+
+    const { data: targets } = await supabase
+      .from("margin_profile_targets")
+      .select("*")
+      .eq("user_id", user.id)
+
+    setMarginProfiles(profiles ?? [])
+    setMarginTargets(targets ?? [])
+  }
 
   const openDetail = async (settlementId: string) => {
     // 같은 행 다시 클릭하면 닫기
@@ -147,6 +261,51 @@ export default function SettlementsPage() {
       setDetail(d)
     } catch (e: any) {
       setError(e?.message ?? String(e))
+    }
+  }
+
+  const handleCreateProfile = () => {
+    setCostPickerOpen(false)
+    window.location.href = "/margin"
+  }
+
+  const handleConnectProfile = async (profileId: string) => {
+    if (!targetLine) return
+
+    const { data: userData } = await supabase.auth.getUser()
+    const user = userData.user
+    if (!user) return
+
+    const productId = String(targetLine.product_id ?? "")
+
+    try {
+      // 기존 매핑 제거 (중복 방지)
+      await supabase
+        .from("margin_profile_targets")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("target_type", "product")
+        .eq("target_key", productId)
+
+      // 새 매핑 추가
+      await supabase
+        .from("margin_profile_targets")
+        .insert({
+          user_id: user.id,
+          profile_id: profileId,
+          target_type: "product",
+          target_key: productId,
+        })
+
+      toast.success("원가 프로필 연결 완료")
+
+      setCostPickerOpen(false)
+
+      // 🔥 핵심: 다시 로드해서 즉시 반영
+      await loadMarginData()
+
+    } catch (e: any) {
+      toast.error(e.message ?? "연결 실패")
     }
   }
 
@@ -394,7 +553,31 @@ export default function SettlementsPage() {
         {detail ? (
           <div className="mt-4 space-y-2">
             <div className="text-sm font-medium">정산 상세</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <AppCard title="총원가">
+                <div className="text-lg font-semibold">
+                  {summary.totalCost.toLocaleString()}원
+                </div>
+              </AppCard>
 
+              <AppCard title="순마진">
+                <div className="text-lg font-semibold">
+                  {summary.totalProfit.toLocaleString()}원
+                </div>
+              </AppCard>
+
+              <AppCard title="마진율">
+                <div className="text-lg font-semibold">
+                  {summary.avgMarginRate.toFixed(1)}%
+                </div>
+              </AppCard>
+
+              <AppCard title="미매칭">
+                <div className="text-lg font-semibold">
+                  {summary.unmatched}건
+                </div>
+              </AppCard>
+            </div>
             <div className="overflow-hidden rounded-xl border">
               <Table>
                 <TableHeader>
@@ -403,35 +586,80 @@ export default function SettlementsPage() {
                     <TableHead className="w-[90px] text-right">판매</TableHead>
                     <TableHead className="w-[110px] text-right">단가</TableHead>
                     <TableHead className="w-[120px] text-right">매출</TableHead>
+
+                    <TableHead className="w-[120px] text-right">원가</TableHead>
+                    <TableHead className="w-[120px] text-right">순마진</TableHead>
+                    <TableHead className="w-[90px] text-right">마진율</TableHead>
+
                     <TableHead className="w-[90px]">매칭</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {detail.lines.map((l: any) => (
-                    <TableRow key={l.id}>
-                      <TableCell className="truncate">
-                        {l.product_name_matched ?? l.product_name_raw}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {Number(l.qty_sold ?? 0).toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {Number(l.unit_price ?? 0).toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {Number(l.gross_amount ?? 0).toLocaleString()}
-                      </TableCell>
-                      <TableCell>{l.match_status}</TableCell>
-                    </TableRow>
-                  ))}
+                  {detail.lines.map((l: any) => {
+                    const calc = calcNetProfit(
+                      l,
+                      productCostMap,
+                      categoryCostMap,
+                      productMap,
+                      stores
+                    )
 
-                  {detail.lines.length === 0 ? (
+                    return (
+                      <TableRow key={l.id}>
+                        <TableCell className="truncate">
+                          {l.product_name_matched ?? l.product_name_raw}
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">
+                          {Number(l.qty_sold ?? 0).toLocaleString()}
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">
+                          {Number(l.unit_price ?? 0).toLocaleString()}
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">
+                          {Number(l.gross_amount ?? 0).toLocaleString()}
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">
+                          {Number(calc.cost ?? 0).toLocaleString()}
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">
+                          {Number(calc.profit ?? 0).toLocaleString()}
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">
+                          {Number(calc.marginRate ?? 0).toFixed(1)}%
+                        </TableCell>
+
+                        <TableCell
+                          className={calc.matched === "none" ? "text-destructive cursor-pointer" : ""}
+                          onClick={() => {
+                            if (calc.matched === "none") {
+                              setTargetLine(l)
+                              setCostPickerOpen(true)
+                            }
+                          }}
+                        >
+                          {calc.matched === "product"
+                            ? "제품"
+                            : calc.matched === "category"
+                              ? "카테고리"
+                              : "미매칭"}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+
+                  {detail.lines.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-sm text-muted-foreground">
+                      <TableCell colSpan={8} className="text-sm text-muted-foreground">
                         라인이 없습니다.
                       </TableCell>
                     </TableRow>
-                  ) : null}
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -474,9 +702,145 @@ export default function SettlementsPage() {
           busy={deleteBusy}
           onConfirm={doDelete}
         />
+        <ConfirmDialog
+          open={costPickerOpen}
+          onOpenChange={setCostPickerOpen}
+          title="원가 프로필 연결"
+          description={
+            targetLine ? (
+              <div className="space-y-4">
+                <div>
+                  상품: {targetLine.product_name_matched ?? targetLine.product_name_raw}
+                </div>
+
+                <div className="text-sm text-muted-foreground">
+                  원가 프로필을 선택하세요
+                </div>
+
+                <div className="max-h-48 overflow-y-auto border rounded-md">
+                  {(() => {
+                    const uniqueProfiles = Array.from(
+                      new Map(marginProfiles.map((p) => [p.id, p])).values()
+                    )
+
+                    if (uniqueProfiles.length === 0) {
+                      return (
+                        <div className="p-3 text-sm text-muted-foreground">
+                          원가 프로필이 없습니다
+                        </div>
+                      )
+                    }
+
+                    return uniqueProfiles.map((p) => (
+                      <button
+                        key={p.id}
+                        className="w-full text-left px-3 py-2 hover:bg-muted border-b last:border-b-0"
+                        onClick={() => handleConnectProfile(p.id)}
+                      >
+                        <div className="font-medium">{p.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          원가 {Number(p.total_cost ?? 0).toLocaleString()}원
+                        </div>
+                      </button>
+                    ))
+                  })()}
+                </div>
+
+                <AppButton
+                  variant="secondary"
+                  onClick={() => setCreateProfileOpen(true)}
+                >
+                  + 새 원가 프로필 만들기
+                </AppButton>
+              </div>
+            ) : null
+          }
+          confirmText="닫기"
+          cancelText="취소"
+          onConfirm={() => setCostPickerOpen(false)}
+        />
+        <Dialog open={createProfileOpen} onOpenChange={setCreateProfileOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>원가 프로필 생성</DialogTitle>
+            </DialogHeader>
+            <MarginCalculatorPage
+              embedded
+              onSaved={async () => {
+                setCreateProfileOpen(false)
+                await loadMarginData()
+              }}
+            />
+          </DialogContent>
+        </Dialog>
       </AppCard>
     </div>
   )
+}
+
+function calcNetProfit(
+  line: any,
+  productCostMap: Map<string, number>,
+  categoryCostMap: Map<string, number>,
+  productMap: Map<string, any>,
+  stores: any[]
+) {
+  const productId = String(line.product_id ?? "")
+  const qty = Number(line.qty_sold ?? 0)
+  const revenue = Number(line.gross_amount ?? 0)
+
+  // 1️⃣ product 기준 매칭
+  let costPerUnit = productCostMap.get(productId)
+
+  // 2️⃣ category fallback
+  if (costPerUnit == null) {
+    const product = productMap.get(productId)
+    const category = product?.category
+    if (category) {
+      costPerUnit = categoryCostMap.get(String(category))
+    }
+  }
+
+  // 3️⃣ 없으면 0
+  if (costPerUnit == null) costPerUnit = 0
+
+  const totalCost = costPerUnit * qty
+
+  // 수수료
+  const lineCommissionRate =
+    line.commission_rate != null
+      ? Number(line.commission_rate)
+      : null
+
+  const store = stores.find(
+    (s: any) => String(s.id) === String(line.marketplace_id)
+  )
+
+  const commissionRate =
+    lineCommissionRate != null
+      ? lineCommissionRate
+      : Number(store?.commission_rate ?? 0)
+  const commission = revenue * (commissionRate / 100)
+
+  // VAT (일단 10% 고정, 이후 개선 가능)
+  const vat = revenue * 0.1
+
+  const profit = revenue - totalCost - commission - vat
+  const marginRate = revenue > 0 ? (profit / revenue) * 100 : 0
+
+  return {
+    cost: totalCost,
+    profit,
+    marginRate,
+    matched:
+      productCostMap.has(productId)
+        ? "product"
+        : (() => {
+          const product = productMap.get(productId)
+          const category = product?.category
+          return categoryCostMap.has(String(category)) ? "category" : "none"
+        })(),
+  }
 }
 
 function TopProductsMiniCard(props: {
@@ -673,5 +1037,6 @@ function TopProductsMiniCard(props: {
         )
       ) : null}
     </AppCard>
+
   )
 }

@@ -5,7 +5,9 @@ import type { Session } from "@supabase/supabase-js"
 import Pricing from "@/pages_legacy/Pricing"
 import "./App.css"
 import AppLoadingScreen from "@/components/shared/AppLoadingScreen"
+import { Toaster } from "sonner"
 
+<Toaster />
 import AppLayout from "./app/layout/AppLayout"
 
 const DashboardPage = lazy(() => import("./features/dashboard/pages/DashboardPage"))
