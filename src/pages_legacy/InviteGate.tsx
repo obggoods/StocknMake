@@ -53,10 +53,10 @@ export default function InviteGate() {
           <div className="space-y-2">
             <h1 className="text-xl font-semibold">초대코드 입력</h1>
             <p className="text-sm text-muted-foreground">
-  베타 테스트는 초대된 사용자만 이용할 수 있어요.
-  <br />
-  초대코드를 입력해 주세요.
-</p>
+              베타 테스트는 초대된 사용자만 이용할 수 있어요.
+              <br />
+              초대코드를 입력해 주세요.
+            </p>
           </div>
 
           <div className="mt-6 space-y-3">
@@ -93,7 +93,7 @@ export default function InviteGate() {
         </AppCard>
 
         <div className="mt-6 text-center text-xs text-muted-foreground">
-          Stock &amp; Make · 초대 기반 베타
+          Stock &amp; Make · 클로즈 베타
         </div>
       </div>
     </div>

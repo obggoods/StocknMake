@@ -88,7 +88,7 @@ function DashboardViewInner() {
     for (const s of settlementsV2 as any[]) {
       const pm = String(s.period_month ?? "")
       const mid = String(s.marketplace_id ?? "")
-      const gross = n(s.gross_amount)
+      const gross = n((s as any).net_amount ?? 0)
 
       if (pm === thisMonth) {
         thisTotal += gross
@@ -247,7 +247,7 @@ function DashboardViewInner() {
 
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border bg-background p-4">
-            <p className="text-xs text-muted-foreground">이번달 총매출</p>
+            <p className="text-xs text-muted-foreground">이번달 정산금액</p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">{fmtKRW(settlementSummary.thisTotal)}원</p>
           </div>
 

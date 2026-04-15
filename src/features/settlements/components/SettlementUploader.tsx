@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent } from "react"
-
+import { Pencil } from "lucide-react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -36,22 +36,21 @@ import { useAppData } from "@/features/core/useAppData"
 import {
   createProductDB,
   getSettlementV2ByMarketplaceMonthDB,
-  listSettlementLinesV2DB,
-  upsertInventoryItemDB,
   upsertInventoryItemsBatchDB, // ✅ 추가
   getMarketplaceCommissionRateDB,
   replaceSettlementLinesDB,
-  upsertSettlementHeaderDB,
+  createSettlementHeaderDB,
   recomputeSettlementProductStatsDB,
 } from "@/data/store.supabase"
 
 import { generateId } from "@/data/store"
-import { parseCsvTextBasic } from "@/features/settlements/lib/parseSettlementCsv"
+import * as XLSX from "xlsx"
 
-type SettlementCsvRow = {
+type SettlementUploadRow = {
   store: string
   period: string
   barcode: string
+  productName?: string  // 👈 추가
   sold_qty: number
   unit_price: number
   currency?: string
@@ -72,22 +71,18 @@ type PreviewRow = {
   status: "ok" | "error"
   error?: string
   ignored?: boolean
+  matchType?: "barcode" | "name_exact" | "name_fuzzy" | "none" // 👈 이 줄 추가
 }
 
 type ColumnMapping = {
   barcode: string
   sold_qty: string
   amount: string
+  product_name: string
 }
 
-function downloadCsv(filename: string, csvBody: string) {
-  const blob = new Blob(["\uFEFF" + csvBody], { type: "text/csv;charset=utf-8;" })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
+type SettlementUploaderProps = {
+  onSaved?: () => void | Promise<void>
 }
 
 function parseIntSafe(v: string): number {
@@ -106,86 +101,136 @@ function parseMoneySafe(v: string): number {
   return Math.max(0, Math.round(n))
 }
 
-function normHeader(v: string): string {
-  return String(v ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "")
-    .replace(/[_-]/g, "")
+type UploadedSheetRow = Record<string, string>
+
+function sanitizeSpreadsheetText(value: unknown): string {
+  const text = String(value ?? "").trim()
+  return /^[=+\-@]/.test(text) ? `'${text}` : text
 }
 
-function guessHeader(headers: string[], candidates: string[]): string | "" {
-  const normalized = headers.map((h) => ({ h, n: normHeader(h) }))
-  for (const c of candidates) {
-    const cn = normHeader(c)
-    const found = normalized.find((x) => x.n === cn)
-    if (found) return found.h
+function downloadExcelTemplate(filename: string) {
+  // ===== 1) 입력 시트 =====
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["barcode", "product_name", "sold_qty", "amount"], // 👈 쉼표 추가
+    ["8801234567890", "제품A", 1, 11000],
+    ["8801234567891", "제품B", 3, 18000],
+    ["8801234567001", "제품C", 4, 31600],
+  ])
+
+  // 👉 컬럼 너비 설정
+  ws["!cols"] = [
+    { wch: 20 }, // barcode
+    { wch: 20 }, // product_name
+    { wch: 10 }, // sold_qty
+    { wch: 15 }, // amount
+  ]
+
+  // ===== 2) 가이드 시트 =====
+  const guide = XLSX.utils.aoa_to_sheet([
+    ["정산 엑셀 업로드 가이드"],
+    [""],
+    ["1. 반드시 첫 행은 헤더여야 합니다."],
+    ["   - barcode / sold_qty / amount"],
+    [""],
+    ["2. barcode는 제품과 매칭되는 값입니다."],
+    ["   - 앱에 등록된 바코드와 동일해야 합니다"],
+    [""],
+    ["3. sold_qty는 판매 수량입니다"],
+    ["   - 1 이상의 숫자"],
+    [""],
+    ["4. amount는 총 판매금액입니다"],
+    ["   - 자동으로 단가 계산됩니다"],
+    [""],
+    ["5. 엑셀 수식은 사용하지 않는 것을 권장합니다"],
+    ["   - (=, +, - 등으로 시작 금지)"],
+    [""],
+    ["6. 한 번에 5000행 이하 업로드 권장"],
+  ])
+
+  guide["!cols"] = [{ wch: 80 }]
+
+  // ===== 3) 워크북 =====
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "Template")
+  XLSX.utils.book_append_sheet(wb, guide, "가이드")
+
+  XLSX.writeFile(wb, filename)
+}
+
+async function readExcelFile(file: File): Promise<{ headers: string[]; rows: UploadedSheetRow[] }> {
+  const data = await file.arrayBuffer()
+  const workbook = XLSX.read(data, { type: "array" })
+
+  const firstSheetName = workbook.SheetNames[0]
+  if (!firstSheetName) {
+    throw new Error("엑셀 시트를 찾지 못했습니다.")
   }
-  for (const c of candidates) {
-    const cn = normHeader(c)
-    const found = normalized.find((x) => x.n.includes(cn) || cn.includes(x.n))
-    if (found) return found.h
-  }
-  return ""
+
+  const sheet = workbook.Sheets[firstSheetName]
+  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    defval: "",
+  })
+
+  const headers = Array.from(
+    rawRows.reduce((set, row) => {
+      Object.keys(row).forEach((key) => {
+        const header = String(key ?? "").trim()
+        if (header) set.add(header)
+      })
+      return set
+    }, new Set<string>())
+  )
+
+  const rows: UploadedSheetRow[] = rawRows.map((row) =>
+    Object.fromEntries(
+      headers.map((header) => [header, sanitizeSpreadsheetText(row[header])])
+    )
+  )
+
+  return { headers, rows }
 }
 
 function parseWithMapping(input: {
-  csvText: string
+  sheetRows: UploadedSheetRow[]
   mapping: ColumnMapping
   storeName: string
-  periodMonth: string // "YYYY-MM"
-}): SettlementCsvRow[] {
-  const { headers, rows } = parseCsvTextBasic(input.csvText)
-  if (headers.length === 0) return []
-
-  const idx = new Map<string, number>()
-  headers.forEach((h, i) => idx.set(h, i))
-
-  if (!input.mapping.barcode || !idx.has(input.mapping.barcode)) {
-    throw new Error("매핑 오류: 바코드 컬럼을 선택하세요.")
+  periodMonth: string
+}): SettlementUploadRow[] {
+  if (!input.mapping.barcode && !input.mapping.product_name) {
+    throw new Error("매핑 오류: 바코드 또는 제품명 컬럼을 선택하세요.")
   }
-  if (!input.mapping.sold_qty || !idx.has(input.mapping.sold_qty)) {
+  if (!input.mapping.sold_qty) {
     throw new Error("매핑 오류: 판매수량 컬럼을 선택하세요.")
   }
-  if (!input.mapping.amount || !idx.has(input.mapping.amount)) {
+  if (!input.mapping.amount) {
     throw new Error("매핑 오류: 순매출(amount) 컬럼을 선택하세요.")
   }
 
-  const get = (row: string[], colName: string) => {
-    const i = idx.get(colName)
-    if (i == null) return ""
-    return (row[i] ?? "").trim()
-  }
+  const out: SettlementUploadRow[] = []
 
-  const out: SettlementCsvRow[] = []
+  for (const row of input.sheetRows) {
+    const barcode = input.mapping.barcode
+      ? sanitizeSpreadsheetText(row[input.mapping.barcode])
+      : ""
 
-  for (const row of rows) {
-    const barcode = get(row, input.mapping.barcode)
-    const sold_qty = parseIntSafe(get(row, input.mapping.sold_qty))
-    const amount = parseMoneySafe(get(row, input.mapping.amount))
+    const productName = input.mapping.product_name
+      ? sanitizeSpreadsheetText(row[input.mapping.product_name])
+      : ""
+    const sold_qty = parseIntSafe(sanitizeSpreadsheetText(row[input.mapping.sold_qty]))
+    const amount = parseMoneySafe(sanitizeSpreadsheetText(row[input.mapping.amount]))
 
-    // 완전 빈 줄 skip
-    if (!barcode && sold_qty === 0 && amount === 0) continue
+    if (!barcode && !productName && sold_qty === 0 && amount === 0) continue
 
-    // amount-only 정책
-    if (sold_qty <= 0 || amount <= 0) {
-      out.push({
-        store: input.storeName,
-        period: input.periodMonth,
-        barcode,
-        sold_qty,
-        unit_price: 0,
-        currency: "KRW",
-      })
-      continue
-    }
-
-    const unit_price = Math.round(amount / sold_qty)
+    const unit_price =
+      sold_qty > 0 && amount > 0
+        ? Math.round(amount / sold_qty)
+        : 0
 
     out.push({
       store: input.storeName,
       period: input.periodMonth,
       barcode,
+      productName,
       sold_qty,
       unit_price,
       currency: "KRW",
@@ -193,6 +238,70 @@ function parseWithMapping(input: {
   }
 
   return out
+}
+
+function normalizeText(v: string) {
+  return String(v ?? "")
+    .toLowerCase()
+    .replace(/\s/g, "")
+    .trim()
+}
+
+function findProductFlexible(
+  products: any[],
+  barcode: string,
+  productName?: string
+): {
+  product: any | null
+  type: "barcode" | "name_exact" | "name_fuzzy" | "none"
+} {
+  // 1️⃣ barcode 매칭
+  let product = products.find(
+    (p) => String(p.barcode ?? "").trim() === barcode
+  )
+  if (product) return { product, type: "barcode" }
+
+  if (!productName) return { product: null, type: "none" }
+
+  const normalizedInput = normalizeText(productName)
+
+  // 2️⃣ 완전 일치
+  product = products.find(
+    (p) => normalizeText(p.name) === normalizedInput
+  )
+  if (product) return { product, type: "name_exact" }
+
+  // 3️⃣ 부분 포함
+  product = products.find(
+    (p) =>
+      normalizeText(p.name).includes(normalizedInput) ||
+      normalizedInput.includes(normalizeText(p.name))
+  )
+
+  if (product) return { product, type: "name_fuzzy" }
+
+  return { product: null, type: "none" }
+}
+
+function guessHeader(headers: string[], candidates: string[]): string | undefined {
+  const normalized = headers.map((h) => ({
+    raw: h,
+    key: String(h ?? "").trim().toLowerCase(),
+  }))
+
+  for (const candidate of candidates) {
+    const c = String(candidate ?? "").trim().toLowerCase()
+    const found = normalized.find((x) => x.key === c)
+    if (found) return found.raw
+  }
+
+  for (const candidate of candidates) {
+    const c = String(candidate ?? "").trim().toLowerCase()
+    const found = normalized.find((x) => x.key.includes(c))
+    if (found) return found.raw
+  }
+
+  return undefined
 }
 
 function SelectField(props: {
@@ -232,9 +341,10 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   const [busy, setBusy] = useState(false)
   const [rows, setRows] = useState<PreviewRow[] | null>(null)
   const [lastFileName, setLastFileName] = useState<string>("")
-  const [summaryCommissionRate, setSummaryCommissionRate] = useState("")
   const [applyToInventory, setApplyToInventory] = useState<boolean>(true)
-
+  const [commissionDraft, setCommissionDraft] = useState<number>(0)
+  const [commissionRate, setCommissionRate] = useState<number>(0)
+  const [commissionEditing, setCommissionEditing] = useState(false)
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [summaryStoreId, setSummaryStoreId] = useState("")
   const [summaryMonth, setSummaryMonth] = useState(() => {
@@ -245,19 +355,56 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   })
   const [summaryGrossAmount, setSummaryGrossAmount] = useState("")
   // ✅ 매핑 UI용 상태
-  const [csvText, setCsvText] = useState<string>("")
-  const [csvHeaders, setCsvHeaders] = useState<string[]>([])
+  const [sheetRows, setSheetRows] = useState<UploadedSheetRow[]>([])
+  const [sheetHeaders, setSheetHeaders] = useState<string[]>([])
   const [mapping, setMapping] = useState<ColumnMapping>({
     barcode: "",
     sold_qty: "",
     amount: "",
+    product_name: "", // 👈 추가
   })
-
+  const [autoCreateOpen, setAutoCreateOpen] = useState(false)
+  const [autoCreateLoading, setAutoCreateLoading] = useState(false)
   const [selectedStoreId, setSelectedStoreId] = useState<string>("")
+
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
   })
+
+  const hasExistingSettlementForSelectedMonth = useMemo(() => {
+    if (!selectedStoreId || !selectedMonth) return false
+
+    return Boolean(
+      a.data.settlementsV2?.some(
+        (s: any) =>
+          String(s.marketplaceId ?? s.marketplace_id ?? "") === selectedStoreId &&
+          String(s.periodMonth ?? s.period_month ?? "") === selectedMonth
+      )
+    )
+  }, [a.data.settlementsV2, selectedStoreId, selectedMonth])
+
+  useEffect(() => {
+    if (!selectedStoreId) return
+
+    const store = a.data.stores.find((s: any) => s.id === selectedStoreId)
+    if (!store) return
+
+    const rate = Number(store?.commissionRate ?? 0)
+    setCommissionRate(rate)
+    setCommissionEditing(false)
+  }, [selectedStoreId, a.data.stores])
+
+  useEffect(() => {
+    if (!summaryStoreId || !summaryOpen) return
+
+    const store = a.data.stores.find((s: any) => s.id === summaryStoreId)
+    if (!store) return
+
+    const rate = Number(store?.commissionRate ?? 0)
+    setCommissionRate(rate)
+    setCommissionEditing(false)
+  }, [summaryStoreId, summaryOpen, a.data.stores])
 
   // ===== 수동 매칭 / 제품 생성 UI 상태 =====
   const [matchOpenIdx, setMatchOpenIdx] = useState<number | null>(null)
@@ -299,14 +446,9 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   }, [])
 
   const templateDownload = useCallback(() => {
-    const template =
-      "barcode,sold_qty,amount\n" +
-      "8801234567890,1,11000\n" +
-      "8801234567891,3,18000\n" +
-      "8801234567001,4,31600\n"
+    downloadExcelTemplate("settlement_template.xlsx")
 
-    downloadCsv("settlement_template.csv", template)
-    toast.success("정산 CSV 템플릿을 다운로드했어요.")
+    toast.success("정산 엑셀 템플릿을 다운로드했어요.")
   }, [])
 
   // ✅ 미리보기 통계
@@ -320,9 +462,9 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
     return { ok: ok.length, err: err.length, gross, sold, stores }
   }, [rows])
 
-  // ✅ CSV → 미리보기 생성
+  // ✅ 엑셀 → 미리보기 생성
   const buildPreview = useCallback(
-    (parsed: SettlementCsvRow[]) => {
+    (parsed: SettlementUploadRow[]) => {
       const next: PreviewRow[] = parsed.map((r, i) => {
         const storeName = (r.store ?? "").trim()
         const period = (r.period ?? "").trim()
@@ -337,8 +479,18 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
         if (!/^\d{4}-\d{2}$/.test(period)) {
           return { idx: i + 1, storeName, period, barcode, soldQty, unitPrice, currency, status: "error", error: "period 형식이 올바르지 않습니다 (YYYY-MM)." }
         }
-        if (!barcode) {
-          return { idx: i + 1, storeName, period, barcode, soldQty, unitPrice, currency, status: "error", error: "barcode가 비어있습니다." }
+        if (!barcode && !r.productName) {
+          return {
+            idx: i + 1,
+            storeName,
+            period,
+            barcode,
+            soldQty,
+            unitPrice,
+            currency,
+            status: "error",
+            error: "barcode 또는 제품명이 필요합니다.",
+          }
         }
         if (soldQty <= 0) {
           return { idx: i + 1, storeName, period, barcode, soldQty, unitPrice, currency, status: "error", error: "sold_qty는 1 이상이어야 합니다." }
@@ -355,7 +507,13 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
           return { idx: i + 1, storeName, period, barcode, soldQty, unitPrice, currency, status: "error", error: "앱에 등록된 입점처명과 일치하지 않습니다." }
         }
 
-        const product = a.data.products.find((p: any) => String(p.barcode ?? "").trim() === barcode)
+        const match = findProductFlexible(
+          a.data.products,
+          barcode,
+          r.productName
+        )
+
+        const product = match?.product
         if (!product) {
           return {
             idx: i + 1,
@@ -367,8 +525,11 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
             unitPrice,
             currency,
             storeId: store.id,
+            productName: r.productName,
+            productNameMatched: undefined,
             status: "error",
-            error: "바코드에 해당하는 제품이 없습니다. (제품 선택 또는 새 제품 만들기를 사용하세요)",
+            matchType: "none",
+            error: "제품을 찾을 수 없습니다. (바코드 또는 제품명 확인)",
           }
         }
 
@@ -386,6 +547,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
           productName: product.name,
           productNameMatched: product.name,
           status: "ok",
+          matchType: match.type, // 👈 추가
         }
       })
 
@@ -394,43 +556,46 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
     [a.data.products, a.data.stores]
   )
 
-  // ✅ 파일 선택 → 텍스트 저장 + 헤더 추출 + 매핑 추정
+  // ✅ 파일 선택 → 시트 읽기 + 헤더 추출 + 매핑 추정
   const onPickFile = useCallback(async (file: File) => {
-    // ✅ 업로드 파일 기본 검증 (운영 안전장치)
-    const MAX_BYTES = 5 * 1024 * 1024 // 5MB
+    const MAX_BYTES = 5 * 1024 * 1024
+
     if (file.size > MAX_BYTES) {
-      toast.error("CSV 파일이 너무 큽니다. 5MB 이하로 업로드해주세요.")
+      toast.error("엑셀 파일이 너무 큽니다. 5MB 이하로 업로드해주세요.")
       return
     }
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      toast.error("CSV 파일(.csv)만 업로드할 수 있습니다.")
+
+    const lower = file.name.toLowerCase()
+    if (!lower.endsWith(".xlsx") && !lower.endsWith(".xls")) {
+      toast.error("엑셀 파일(.xlsx, .xls)만 업로드할 수 있습니다.")
       return
     }
+
     try {
-      const text = await file.text()
-      const { headers } = parseCsvTextBasic(text)
+      const { headers, rows } = await readExcelFile(file)
 
       if (headers.length === 0) {
-        toast.error("CSV 헤더를 읽지 못했습니다. 파일 형식을 확인하세요.")
+        toast.error("엑셀 헤더를 읽지 못했습니다. 파일 형식을 확인하세요.")
         return
       }
 
-      setCsvText(text)
-      setCsvHeaders(headers)
+      setSheetRows(rows)
+      setSheetHeaders(headers)
       setRows(null)
       setLastFileName(file.name)
 
       const guessed: ColumnMapping = {
-        barcode: guessHeader(headers, ["barcode", "바코드", "ean", "jan", "상품바코드"]) || "",
-        sold_qty: guessHeader(headers, ["sold_qty", "qty", "수량", "판매수량", "매출수량", "판매량"]) || "",
-        amount: guessHeader(headers, ["amount", "순매출", "매출액", "정산금", "금액"]) || "",
+        barcode: guessHeader(headers, ["barcode", "바코드", "ean", "jan"]) || "",
+        sold_qty: guessHeader(headers, ["sold_qty", "qty", "수량", "판매수량"]) || "",
+        amount: guessHeader(headers, ["amount", "매출", "금액"]) || "",
+        product_name: guessHeader(headers, ["product_name", "제품명", "상품명", "name"]) || "",
       }
       setMapping(guessed)
 
-      toast.success("CSV를 불러왔어요. 컬럼 매핑을 확인한 뒤 미리보기를 생성하세요.")
+      toast.success("엑셀을 불러왔어요. 컬럼 매핑을 확인한 뒤 미리보기를 생성하세요.")
     } catch (e: any) {
       console.error(e)
-      toast.error(`CSV 읽기 실패: ${e?.message ?? e}`)
+      toast.error(`엑셀 읽기 실패: ${e?.message ?? e}`)
     } finally {
       if (inputRef.current) inputRef.current.value = ""
     }
@@ -444,15 +609,22 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
 
   const canBuildPreview = useMemo(() => {
     return Boolean(
-      csvText &&
-      csvHeaders.length > 0 &&
+      sheetRows.length > 0 &&
+      sheetHeaders.length > 0 &&
       selectedStoreId &&
       selectedMonth &&
-      mapping.barcode &&
       mapping.sold_qty &&
-      mapping.amount
+      mapping.amount &&
+      (mapping.barcode || mapping.product_name) // 👈 핵심
     )
-  }, [csvText, csvHeaders.length, selectedStoreId, selectedMonth, mapping])
+  }, [sheetRows.length, sheetHeaders.length, selectedStoreId, selectedMonth, mapping])
+
+  useEffect(() => {
+    if (hasExistingSettlementForSelectedMonth && applyToInventory) {
+      setApplyToInventory(false)
+      toast.error("같은 입점처/같은 월 기존 정산이 있어 재고 반영을 자동으로 껐어요.")
+    }
+  }, [hasExistingSettlementForSelectedMonth, applyToInventory])
 
   const onBuildPreviewClick = useCallback(() => {
     try {
@@ -468,14 +640,14 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
       }
 
       const parsed = parseWithMapping({
-        csvText,
+        sheetRows,
         mapping,
         storeName: String(store.name ?? "").trim(),
         periodMonth: selectedMonth,
       })
 
       if (parsed.length === 0) {
-        toast.error("CSV에 데이터가 없습니다.")
+        toast.error("엑셀에 데이터가 없습니다.")
         return
       }
 
@@ -491,53 +663,51 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
       console.error(e)
       toast.error(`미리보기 생성 실패: ${e?.message ?? e}`)
     }
-  }, [canBuildPreview, csvText, mapping, buildPreview, a.data.stores, selectedStoreId, selectedMonth])
+  }, [canBuildPreview, sheetRows, mapping, buildPreview, a.data.stores, selectedStoreId, selectedMonth])
 
   async function saveSummarySettlement() {
     try {
       if (busy) return
 
       if (!summaryStoreId) {
-        toast.error("입점처를 선택해줘")
+        toast.error("입점처를 선택해주세요.")
         return
       }
 
       if (!summaryMonth) {
-        toast.error("정산 월을 선택해줘")
+        toast.error("정산 월을 선택해주세요.")
         return
       }
 
-      const grossAmount = Number(String(summaryGrossAmount).replaceAll(",", "").trim())
+      const grossAmount = Number(String(summaryGrossAmount).replace(/,/g, "").trim())
 
       if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
-        toast.error("판매총액을 올바르게 입력해줘")
+        toast.error("판매총액을 올바르게 입력해주세요.")
         return
       }
 
       if (grossAmount > 1000000000000) {
-        toast.error("판매총액이 너무 커. 값을 다시 확인해줘")
+        toast.error("판매총액이 너무 큽니다. 값을 다시 확인해주세요.")
         return
       }
 
-      const commissionRatePercent = Number(
-        String(summaryCommissionRate).replaceAll(",", "").trim()
-      )
+      const commissionRatePercent = commissionRate ?? 0
 
       if (!Number.isFinite(commissionRatePercent) || commissionRatePercent < 0 || commissionRatePercent > 100) {
-        toast.error("수수료율은 0~100 사이로 입력해줘")
+        toast.error("수수료율은 0~100 사이로 입력해주세요.")
         return
       }
 
-      const commissionRate = commissionRatePercent / 100
-      const commissionAmount = Math.round(grossAmount * commissionRate)
+      const commissionRateDecimal = commissionRatePercent / 100
+      const commissionAmount = Math.round(grossAmount * commissionRateDecimal)
       const netAmount = grossAmount - commissionAmount
 
-      const saved = await upsertSettlementHeaderDB({
+      const saved = await createSettlementHeaderDB({
         marketplaceId: summaryStoreId,
         periodMonth: summaryMonth,
         currency: "KRW",
         grossAmount,
-        commissionRate,
+        commissionRate: commissionRateDecimal,
         commissionAmount,
         netAmount,
         rowsCount: 0,
@@ -560,7 +730,6 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
       setSummaryOpen(false)
       setSummaryStoreId("")
       setSummaryGrossAmount("")
-      setSummaryCommissionRate("")
 
       if (typeof (a as any).refresh === "function") {
         await (a as any).refresh()
@@ -570,22 +739,16 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
         await onSaved()
       }
 
-      toast.success("판매총액 정산이 저장됐어")
+      toast.success("판매총액 정산이 저장되었습니다.")
     } catch (error: any) {
       console.error(error)
-      toast.error(error?.message ?? "판매총액 정산 저장 중 오류가 발생했어")
+      toast.error(error?.message ?? "판매총액 정산 저장 중 오류가 발생했습니다.")
     }
   }
 
-  /**
-   * ✅ v2 저장
-   * - 헤더 upsert
-   * - 라인 delete+insert
-   * - 재업로드(동일 월/입점처)도 안전하게 덮어씀
-   * - 재고 반영은 옵션(델타 방식)
-   */
   const apply = useCallback(async () => {
     if (!rows || rows.length === 0) return
+
     if (rows.some((r) => !r.ignored && r.status === "error")) {
       toast.error("오류가 있는 행이 있어 적용할 수 없습니다. (삭제해서 제외할 수 있어요)")
       return
@@ -603,36 +766,37 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
     for (const r of okRows) {
       const key = `${r.storeId}__${r.period}`
       const cur = byStoreMonth.get(key)
-      if (!cur) byStoreMonth.set(key, { storeId: r.storeId, month: r.period, storeName: r.storeName, rows: [r] })
-      else cur.rows.push(r)
+      if (!cur) {
+        byStoreMonth.set(key, {
+          storeId: r.storeId,
+          month: r.period,
+          storeName: r.storeName,
+          rows: [r],
+        })
+      } else {
+        cur.rows.push(r)
+      }
     }
 
     try {
       setBusy(true)
 
-      // ✅ 재고 반영 확인은 apply 시작 시 1회만 (부분 적용/반복 confirm 방지)
-      const shouldApplyInventory =
-        applyToInventory ? window.confirm("판매 수량을 재고에 반영하시겠습니까?") : false
+      const requestedInventoryApply = applyToInventory
+      let confirmedInventoryApply = false
+
+      if (requestedInventoryApply) {
+        confirmedInventoryApply = window.confirm("판매 수량을 재고에 반영하시겠습니까?")
+      }
 
       for (const g of byStoreMonth.values()) {
-        // === 1) old qty map ===
-        const existing = await getSettlementV2ByMarketplaceMonthDB({
+        const existingForThisMonth = await getSettlementV2ByMarketplaceMonthDB({
           marketplaceId: g.storeId,
           periodMonth: g.month,
         })
 
-        const oldQty = new Map<string, number>()
-        if (existing?.id) {
-          const oldLines = await listSettlementLinesV2DB({ settlementId: existing.id })
-          for (const l of oldLines) {
-            const pid = String(l.product_id ?? "")
-            if (!pid) continue
-            const q = Number(l.qty_sold ?? 0)
-            oldQty.set(pid, (oldQty.get(pid) ?? 0) + q)
-          }
-        }
+        const shouldApplyInventoryFinal =
+          confirmedInventoryApply && !existingForThisMonth?.id
 
-        // === 2) new lines aggregate ===
         const agg = new Map<
           string,
           { productId: string; productName: string; soldQty: number; unitPrice: number; gross: number }
@@ -641,6 +805,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
         for (const r of g.rows) {
           const k = r.productId
           const prev = agg.get(k)
+
           if (!prev) {
             const gross = r.soldQty * r.unitPrice
             agg.set(k, {
@@ -670,34 +835,42 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
 
         const grossAmount = lines.reduce((sum, l) => sum + l.grossAmount, 0)
 
-        // === 3) commission rate ===
-        let commissionRate = 0
+        let commissionRateFinal = (commissionRate ?? 0) / 100
+        let storeCommissionRateFromDB = 0
+
         try {
-          commissionRate = await getMarketplaceCommissionRateDB({ marketplaceId: g.storeId }) // 0.25 형태
+          storeCommissionRateFromDB = await getMarketplaceCommissionRateDB({
+            marketplaceId: g.storeId,
+          })
         } catch {
-          commissionRate = 0
-        }
-        if (!commissionRate) {
-          const store = a.data.stores.find((s: any) => s.id === g.storeId)
-          const pct = Number(store?.commissionRate ?? 0) || 0
-          commissionRate = pct / 100
+          storeCommissionRateFromDB = 0
         }
 
-        const commissionAmount = Math.round(grossAmount * commissionRate)
+        if (!commissionEditing) {
+          if (storeCommissionRateFromDB > 0) {
+            commissionRateFinal = storeCommissionRateFromDB
+          } else {
+            const store = a.data.stores.find((s: any) => s.id === g.storeId)
+            const pct = Number(store?.commissionRate ?? 0) || 0
+            commissionRateFinal = pct / 100
+          }
+        }
+
+        const commissionAmount = Math.round(grossAmount * commissionRateFinal)
         const netAmount = grossAmount - commissionAmount
 
-        // === 4) header upsert + replace lines ===
-        const settlement = await upsertSettlementHeaderDB({
+        const settlement = await createSettlementHeaderDB({
           marketplaceId: g.storeId,
           periodMonth: g.month,
           currency: "KRW",
           grossAmount,
-          commissionRate,
+          commissionRate: commissionRateFinal,
           commissionAmount,
           netAmount,
           rowsCount: lines.length,
           sourceFilename: lastFileName || null,
-          applyToInventory: shouldApplyInventory,
+          applyToInventory: shouldApplyInventoryFinal,
+          settlementType: "detailed",
         })
 
         await replaceSettlementLinesDB({
@@ -711,49 +884,49 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
           periodMonth: g.month,
         })
 
-        // === 5) delta inventory apply (optional) ===
-        if (shouldApplyInventory) {
+        if (shouldApplyInventoryFinal) {
           const newQty = new Map<string, number>()
+
           for (const l of lines) {
             const pid = String(l.productId ?? "")
             if (!pid) continue
             newQty.set(pid, (newQty.get(pid) ?? 0) + Number(l.qtySold ?? 0))
           }
 
-          const allPids = new Set<string>([...oldQty.keys(), ...newQty.keys()])
           const updates: Array<{ storeId: string; productId: string; onHandQty: number }> = []
 
-          for (const pid of allPids) {
-            const oldQ = oldQty.get(pid) ?? 0
-            const newQ = newQty.get(pid) ?? 0
-            const delta = newQ - oldQ
-            if (delta === 0) continue
-
-            const inv = a.data.inventory.find((x: any) => x.storeId === g.storeId && x.productId === pid)
+          for (const [pid, soldQty] of newQty.entries()) {
+            const inv = a.data.inventory.find(
+              (x: any) => x.storeId === g.storeId && x.productId === pid
+            )
             const current = Number(inv?.onHandQty ?? 0)
+            const nextQty = Math.max(0, current - soldQty)
 
-            const nextQty = delta > 0 ? Math.max(0, current - delta) : current + Math.abs(delta)
-
-            updates.push({ storeId: g.storeId, productId: pid, onHandQty: nextQty })
+            updates.push({
+              storeId: g.storeId,
+              productId: pid,
+              onHandQty: nextQty,
+            })
           }
 
-          // ✅ 여기서 한 번에 업서트 (chunk는 내부에서 처리)
-          await upsertInventoryItemsBatchDB(updates)
+          if (updates.length > 0) {
+            await upsertInventoryItemsBatchDB(updates)
+          }
         }
       }
 
-      toast.success(shouldApplyInventory ? "정산 저장 + 재고 반영 완료" : "정산 저장 완료 (재고 미반영)")
+      toast.success("정산 저장이 완료되었습니다.")
+
       setRows(null)
       setLastFileName("")
-      setCsvText("")
-      setCsvHeaders([])
+      setSheetRows([])
+      setSheetHeaders([])
 
       await a.refresh()
 
       if (onSaved) {
         await onSaved()
       }
-
     } catch (e: any) {
       console.error(e)
       toast.error(`정산(v2) 저장 실패: ${e?.message ?? e}`)
@@ -772,11 +945,11 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
       <AppCard
         density="compact"
         title="새 정산 추가"
-        description="CSV 업로드 → 입점처/월 선택 → 컬럼 매핑(바코드/수량/금액) → 미리보기 → v2 정산 저장"
+        description="엑셀 업로드 → 입점처/월 선택 → 컬럼 매핑(바코드/수량/금액) → 미리보기 → v2 정산 저장"
         action={
           <div className="flex flex-wrap items-center gap-2">
             <AppButton type="button" variant="outline" onClick={templateDownload}>
-              CSV 템플릿 다운로드
+              엑셀 템플릿 다운로드
             </AppButton>
 
             <AppButton
@@ -785,7 +958,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
               onClick={() => inputRef.current?.click()}
               disabled={a.loading || busy}
             >
-              CSV 업로드
+              엑셀 업로드
             </AppButton>
 
             <AppButton
@@ -800,13 +973,13 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
             <input
               ref={inputRef}
               type="file"
-              accept=".csv"
+              accept=".xlsx,.xls"
               className="hidden"
               onChange={onChangeFile}
             />
           </div>
         }
-        contentClassName="px-4 pb-4"
+        contentClassName="px-4 pb-4 overflow-visible"
       >
         {summaryOpen ? (
           <div className="mt-4 space-y-3">
@@ -876,21 +1049,52 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   />
                 </label>
               </div>
+              <div className="flex items-center gap-2 group">
+                <span className="text-xs text-muted-foreground">수수료율</span>
 
-              <label className="grid gap-1">
-                <span className="text-xs text-muted-foreground">
-                  수수료율(%) <span className="text-destructive"> *</span>
-                </span>
-                <AppInput
-                  inputMode="decimal"
-                  placeholder="예: 30"
-                  value={summaryCommissionRate}
-                  onChange={(e) => {
-                    const cleaned = e.target.value.replace(/[^\d.]/g, "")
-                    setSummaryCommissionRate(cleaned)
-                  }}
-                />
-              </label>
+                <div className="flex items-center gap-1">
+                  {!commissionEditing ? (
+                    <span
+                      className="text-sm font-medium cursor-pointer hover:underline"
+                      onClick={() => {
+                        setCommissionDraft(commissionRate)
+                        setCommissionEditing(true)
+                      }}
+                    >
+                      {commissionRate}%
+                    </span>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={commissionDraft}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          if (Number.isNaN(v)) return
+                          setCommissionDraft(v)
+                        }}
+                        onBlur={() => {
+                          setCommissionRate(commissionDraft)
+                          setCommissionEditing(false)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            setCommissionRate(commissionDraft)
+                            setCommissionEditing(false)
+                          }
+                          if (e.key === "Escape") {
+                            setCommissionEditing(false)
+                          }
+                        }}
+                        className="h-8 w-20 rounded-md border px-2 text-sm"
+                      />
+                      <span className="text-sm">%</span>
+                    </div>
+                  )}
+                </div>
+              </div>
 
               <div className="flex flex-wrap justify-end gap-2">
                 <AppButton
@@ -900,7 +1104,6 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                     setSummaryOpen(false)
                     setSummaryStoreId("")
                     setSummaryGrossAmount("")
-                    setSummaryCommissionRate("")
                   }}
                   disabled={busy}
                 >
@@ -919,15 +1122,65 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
           </div>
         ) : null}
 
-        {csvHeaders.length > 0 && !rows ? (
+        {sheetHeaders.length > 0 && !rows ? (
           <div className="mt-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <AppBadge variant="secondary">헤더 {csvHeaders.length}개</AppBadge>
+              <AppBadge variant="secondary">헤더 {sheetHeaders.length}개</AppBadge>
               {lastFileName ? <span className="text-xs text-muted-foreground">{lastFileName}</span> : null}
             </div>
-
+            {hasExistingSettlementForSelectedMonth ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-muted-foreground">
+                같은 입점처 / 같은 월 정산이 이미 있습니다.
+                이번 업로드는 기존 정산을 덮어쓰지 않고 새 정산으로 저장되며,
+                재고 반영은 기본적으로 OFF 처리됩니다.
+              </div>
+            ) : null}
             <div className="rounded-xl border p-4 space-y-3">
               <div className="text-sm font-medium">컬럼 매핑</div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">수수료율</span>
+
+                {!commissionEditing ? (
+                  <>
+                    <span className="text-sm font-medium">
+                      {commissionRate}%
+                    </span>
+
+                    <AppButton
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setCommissionEditing(true)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </AppButton>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={commissionRate ?? 0}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (Number.isNaN(v)) return
+                        if (v < 0 || v > 100) return
+                        setCommissionRate(v)
+                      }}
+                      className="h-8 w-20 rounded-md border px-2 text-sm"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => setCommissionEditing(false)}
+                      className="text-xs text-primary"
+                    >
+                      완료
+                    </button>
+                  </>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <label className="grid gap-1">
@@ -977,7 +1230,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   label="바코드(barcode)"
                   required
                   value={mapping.barcode}
-                  options={csvHeaders}
+                  options={sheetHeaders}
                   onChange={(v) => setMapping((m) => ({ ...m, barcode: v }))}
                 />
 
@@ -985,7 +1238,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   label="판매수량(sold_qty)"
                   required
                   value={mapping.sold_qty}
-                  options={csvHeaders}
+                  options={sheetHeaders}
                   onChange={(v) => setMapping((m) => ({ ...m, sold_qty: v }))}
                 />
 
@@ -993,8 +1246,15 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   label="순매출(amount)"
                   required
                   value={mapping.amount}
-                  options={csvHeaders}
+                  options={sheetHeaders}
                   onChange={(v) => setMapping((m) => ({ ...m, amount: v }))}
+                />
+
+                <SelectField
+                  label="제품명(product_name)"
+                  value={mapping.product_name ?? ""}
+                  options={sheetHeaders}
+                  onChange={(v) => setMapping((m) => ({ ...m, product_name: v }))}
                 />
               </div>
 
@@ -1003,9 +1263,16 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   type="button"
                   variant="outline"
                   onClick={() => {
-                    setCsvText("")
-                    setCsvHeaders([])
+                    setSheetRows([])
+                    setSheetHeaders([])
                     setLastFileName("")
+                    setRows(null)
+                    setMapping({
+                      barcode: "",
+                      sold_qty: "",
+                      amount: "",
+                      product_name: "", // 👈 이거 추가
+                    })
                   }}
                   disabled={busy}
                 >
@@ -1066,7 +1333,19 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                         <div className="flex flex-col gap-2">
                           <div>
                             {r.status === "ok" ? (
-                              <span className="text-xs text-success">OK</span>
+                              <>
+                                <div className="text-xs text-success">
+                                  {r.matchType === "barcode" && "바코드 매칭"}
+                                  {r.matchType === "name_exact" && "제품명 매칭"}
+                                  {r.matchType === "name_fuzzy" && "유사 매칭"}
+                                </div>
+
+                                {r.matchType === "name_fuzzy" && (
+                                  <div className="text-[11px] text-yellow-600">
+                                    유사 매칭됨 (확인 필요)
+                                  </div>
+                                )}
+                              </>
                             ) : (
                               <span className="text-xs text-destructive">매칭 필요</span>
                             )}
@@ -1096,7 +1375,11 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                                   </AppButton>
                                 </PopoverTrigger>
 
-                                <PopoverContent align="start" className="p-0 w-[320px]">
+                                <PopoverContent
+                                  align="start"
+                                  side="right"
+                                  className="p-0 w-[320px] z-50"
+                                >
                                   <Command>
                                     <CommandInput placeholder="제품 검색..." />
                                     <CommandList>
@@ -1112,7 +1395,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                                               toast.success("수동 매칭 완료")
                                             }}
                                           >
-                                            <div className="min-w-0">
+                                            <div className="min-w-0 break-words">
                                               <div className="text-sm truncate">{p.name}</div>
                                               <div className="text-[11px] text-muted-foreground truncate">
                                                 SKU: {p.sku ?? "-"} · Barcode: {p.barcode ?? "-"}
@@ -1166,6 +1449,15 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                 재고에도 반영하기 (기본 ON)
               </label>
 
+              <AppButton
+                type="button"
+                variant="outline"
+                onClick={() => setAutoCreateOpen(true)}
+                disabled={!rows || rows.filter(r => r.status === "error" && !r.ignored).length === 0}
+              >
+                매칭 실패 제품 자동 생성
+              </AppButton>
+
               <AppButton type="button" variant="outline" onClick={() => setRows(null)} disabled={busy}>
                 취소
               </AppButton>
@@ -1179,19 +1471,107 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
               </AppButton>
             </div>
           </div>
-        ) : csvHeaders.length === 0 ? (
+        ) : sheetHeaders.length === 0 ? (
           <div className="mt-4">
             <EmptyState
-              title="정산 CSV를 업로드하세요"
+              title="정산 엑셀을 업로드하세요"
               description="업로드 후 컬럼 매핑을 하면, 미리보기에서 매칭 결과를 확인할 수 있어요."
             />
           </div>
         ) : null}
       </AppCard>
 
+      <Dialog open={autoCreateOpen} onOpenChange={setAutoCreateOpen}>
+        <DialogContent className="z-50">
+          <DialogHeader>
+            <DialogTitle>제품 자동 생성</DialogTitle>
+          </DialogHeader>
+
+          <div className="text-sm text-muted-foreground">
+            매칭되지 않은 제품을 자동으로 생성합니다.
+            <br />
+            생성 후 되돌릴 수 없습니다.
+          </div>
+
+          <DialogFooter>
+            <AppButton
+              type="button"
+              variant="outline"
+              onClick={() => setAutoCreateOpen(false)}
+              disabled={autoCreateLoading}
+            >
+              취소
+            </AppButton>
+
+            <AppButton
+              type="button"
+              onClick={async () => {
+                if (!rows) return
+
+                try {
+                  setAutoCreateLoading(true)
+
+                  const failedRows = rows.filter(
+                    (r) => r.status === "error" && !r.ignored
+                  )
+
+                  for (const r of failedRows) {
+                    const name = String(r.productName ?? "").trim()
+                    if (!name) continue
+
+                    const p = {
+                      id: generateId("p"),
+                      name,
+                      category: null,
+                      active: true,
+                      makeEnabled: true,
+                      createdAt: Date.now(),
+                      price: 0,
+                      sku: null,
+                      barcode: r.barcode || null,
+                    }
+
+                    await createProductDB(p as any)
+
+                    setRows((prev) =>
+                      (prev ?? []).map((x) => {
+                        if (x.idx !== r.idx) return x
+                        return {
+                          ...x,
+                          status: "ok",
+                          error: undefined,
+                          productId: p.id,
+                          productName: p.name,
+                          productNameMatched: p.name,
+                          matchType: "none",
+                        }
+                      })
+                    )
+                  }
+
+                  await a.refresh()
+
+                  toast.success("제품 생성 및 매칭 완료")
+                  setAutoCreateOpen(false)
+
+                } catch (e: any) {
+                  console.error(e)
+                  toast.error("자동 생성 중 오류 발생")
+                } finally {
+                  setAutoCreateLoading(false)
+                }
+              }}
+              disabled={autoCreateLoading}
+            >
+              {autoCreateLoading ? "생성 중..." : "생성 진행"}
+            </AppButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ✅ 정산에서 새 제품 만들기 */}
       <Dialog open={createOpen} onOpenChange={(open) => setCreateOpen(open)}>
-        <DialogContent>
+        <DialogContent className="z-50">
           <DialogHeader>
             <DialogTitle>정산에서 새 제품 만들기</DialogTitle>
           </DialogHeader>

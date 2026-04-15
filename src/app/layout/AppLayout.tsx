@@ -17,7 +17,7 @@ export default function AppLayout(props: {
 
   return (
     <div className="min-h-screen bg-muted/30">
-      <div className="flex min-h-screen">
+      <div className="flex">
         <Sidebar
           isAdmin={isAdmin}
           mobileOpen={mobileSidebarOpen}
@@ -32,7 +32,7 @@ export default function AppLayout(props: {
             onOpenSidebar={() => setMobileSidebarOpen(true)}
           />
 
-<main className="w-full overflow-x-hidden">
+          <main className="flex-1 overflow-x-hidden">
             <div className="mx-auto max-w-6xl px-4 py-6">
               <Outlet />
             </div>

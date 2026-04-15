@@ -69,7 +69,7 @@ export default function Login() {
         if (error) throw error
 
         // supabase 설정에 따라 이메일 인증이 필요할 수 있음
-        setMessage("회원가입이 완료됐어요. 이메일 인증이 필요할 수 있어요.")
+        setMessage("회원가입이 완료됐어요. 인증을 위해 가입한 이메일의 메일함을 확인해주세요.")
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: emailTrimmed,
@@ -231,8 +231,8 @@ export default function Login() {
                   {/* 메시지 */}
                   {message && (
                     <div className={`rounded-md border px-3 py-2 text-sm ${message ? "text-muted-foreground" : "text-transparent"}`}>
-                    {message || "placeholder"}
-                  </div>
+                      {message || "placeholder"}
+                    </div>
                   )}
                 </form>
               </TabsContent>
@@ -277,8 +277,8 @@ export default function Login() {
 
                   {message && (
                     <div className={`rounded-md border px-3 py-2 text-sm ${message ? "text-muted-foreground" : "text-transparent"}`}>
-                    {message || "placeholder"}
-                  </div>
+                      {message || "placeholder"}
+                    </div>
                   )}
                 </form>
               </TabsContent>
@@ -287,7 +287,7 @@ export default function Login() {
         </AppCard>
 
         <div className="mt-6 text-center text-xs text-muted-foreground">
-          Stock &amp; Make · 초대 기반 베타
+          Stock &amp; Make · 클로즈 베타
         </div>
       </div>
     </div>
