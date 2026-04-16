@@ -1,292 +1,433 @@
-import { useEffect, useMemo, useState } from "react"
-import type { FormEvent } from "react"
-import { useNavigate } from "react-router-dom"
-
+import { useRef, useState } from "react"
 import { supabase } from "../lib/supabaseClient"
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AppCard } from "@/components/app/AppCard"
-import { AppInput } from "@/components/app/AppInput"
-import { AppButton } from "@/components/app/AppButton"
+import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 
-export default function Login() {
-  const nav = useNavigate()
-
-  // 이미 로그인 상태면 대시보드로
-  useEffect(() => {
-    let alive = true
-
-    const check = async () => {
-      const { data } = await supabase.auth.getSession()
-      if (!alive) return
-      if (data.session) nav("/dashboard", { replace: true })
-    }
-    check()
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) nav("/dashboard", { replace: true })
-    })
-
-    return () => {
-      alive = false
-      sub.subscription.unsubscribe()
-    }
-  }, [nav])
-
+export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "signup">("login")
+  const [errorType, setErrorType] = useState<"email" | "password" | null>(null)
 
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
+  const [loginEmail, setLoginEmail] = useState("")
+  const [loginPassword, setLoginPassword] = useState("")
+
+  const [signupEmail, setSignupEmail] = useState("")
+  const [signupPassword, setSignupPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [inviteCode, setInviteCode] = useState("")
+
+  const emailRef = useRef<HTMLInputElement | null>(null)
+  const passwordRef = useRef<HTMLInputElement | null>(null)
 
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState<string>("")
+  const [message, setMessage] = useState<string | null>(null)
+  const [shake, setShake] = useState(false)
 
-  const [forgotOpen, setForgotOpen] = useState(false)
-  const [forgotEmail, setForgotEmail] = useState("")
-  const [forgotLoading, setForgotLoading] = useState(false)
-  const [forgotMsg, setForgotMsg] = useState("")
+  const triggerShake = () => {
+    setShake(true)
+    window.setTimeout(() => setShake(false), 300)
+  }
 
-  const emailTrimmed = useMemo(() => email.trim(), [email])
-
-  useEffect(() => {
-    setMessage("")
-    // 모드 바뀌면 비번찾기 패널은 닫는 게 UX상 자연스러움
-    setForgotOpen(false)
-    setForgotMsg("")
-  }, [mode])
-
-  const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    setMessage("")
+    setMessage(null)
+    setErrorType(null)
 
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
-          email: emailTrimmed,
-          password,
+        if (!inviteCode.trim()) {
+          setMessage("초대코드를 입력해 주세요.")
+          setLoading(false)
+          return
+        }
+
+        if (signupPassword !== confirmPassword) {
+          setMessage("비밀번호가 일치하지 않아요.")
+          setErrorType("password")
+          triggerShake()
+          setLoading(false)
+          return
+        }
+
+        const { error: signUpError } = await supabase.auth.signUp({
+          email: signupEmail,
+          password: signupPassword,
         })
+
+        if (signUpError) {
+          if (signUpError.message.includes("User already registered")) {
+            setMessage("이미 가입된 이메일입니다.")
+            setErrorType("email")
+            emailRef.current?.focus()
+          } else if (signUpError.message.includes("Password")) {
+            setMessage("비밀번호는 최소 6자 이상이어야 합니다.")
+            setErrorType("password")
+            passwordRef.current?.focus()
+          } else {
+            setMessage("회원가입 중 오류가 발생했습니다.")
+          }
+          triggerShake()
+          setLoading(false)
+          return
+        }
+
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: signupEmail,
+          password: signupPassword,
+        })
+
+        if (signInError) {
+          setMessage("회원가입 후 로그인 처리 중 오류가 발생했습니다.")
+          triggerShake()
+          setLoading(false)
+          return
+        }
+
+        const { data, error } = await supabase.rpc("redeem_invite", {
+          p_code: inviteCode.trim(),
+        })
+
         if (error) throw error
 
-        // supabase 설정에 따라 이메일 인증이 필요할 수 있음
-        setMessage("회원가입이 완료됐어요. 인증을 위해 가입한 이메일의 메일함을 확인해주세요.")
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: emailTrimmed,
-          password,
-        })
-        if (error) throw error
+        if (!data?.ok) {
+          const rpcError = data?.error ?? "unknown"
 
-        setMessage("로그인 성공! 이동 중…")
-        // 실제 이동은 onAuthStateChange가 처리
+          if (rpcError === "invalid_code") {
+            setMessage("초대코드가 올바르지 않아요.")
+          } else if (rpcError === "already_used") {
+            setMessage("이미 사용된 초대코드예요.")
+          } else {
+            setMessage("초대코드 처리 중 오류가 발생했어요.")
+          }
+
+          await supabase.auth.signOut()
+          triggerShake()
+          setLoading(false)
+          return
+        }
+
+        window.location.href = "/dashboard"
+        return
       }
-    } catch (err: any) {
-      setMessage(err?.message ?? "에러가 발생했어요.")
+
+      if (mode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: loginEmail,
+          password: loginPassword,
+        })
+
+        if (error) {
+          if (error.message === "Invalid login credentials") {
+            setMessage("이메일 또는 비밀번호가 올바르지 않습니다.")
+            setErrorType("password")
+            triggerShake()
+            passwordRef.current?.focus()
+          } else {
+            setMessage("로그인 중 오류가 발생했습니다.")
+            triggerShake()
+          }
+          setLoading(false)
+          return
+        }
+
+        window.location.href = "/dashboard"
+        return
+      }
+    } catch (e: any) {
+      if (e?.message === "Invalid login credentials") {
+        setMessage("이메일 또는 비밀번호가 올바르지 않습니다.")
+        setErrorType("password")
+        passwordRef.current?.focus()
+      } else {
+        setMessage("요청 처리 중 오류가 발생했습니다.")
+      }
+      triggerShake()
     } finally {
       setLoading(false)
     }
   }
 
-  const sendResetEmail = async () => {
-    const target = (forgotEmail || "").trim()
-    if (!target) {
-      setForgotMsg("이메일을 입력해 주세요.")
-      return
-    }
-
-    setForgotLoading(true)
-    setForgotMsg("")
-
-    const { error } = await supabase.auth.resetPasswordForEmail(target, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    })
-
-    if (error) setForgotMsg("메일 전송 실패: " + error.message)
-    else setForgotMsg("재설정 메일을 보냈어요. 메일함을 확인해 주세요.")
-
-    setForgotLoading(false)
-  }
-
   return (
-    <div className="min-h-screen bg-background text-foreground grid place-items-center px-4 py-10">
-      <div className="w-full max-w-md">
-        <AppCard className="p-6">
-          <div className="space-y-2">
-            <h1 className="text-xl font-semibold">스톡앤메이크 | 재고·제작 관리</h1>
-            <p className="text-sm text-muted-foreground">Supabase 이메일 로그인</p>
-          </div>
-
-          <div className="mt-6">
-            <Tabs
-              value={mode}
-              onValueChange={(v) => setMode(v as "login" | "signup")}
-              className="w-full"
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="flex w-full max-w-4xl flex-col gap-6">
+        <Card className="w-full overflow-hidden p-0">
+          <CardContent className="grid min-h-[560px] p-0 md:grid-cols-2">
+            <form
+              onSubmit={onSubmit}
+              className={`flex h-full flex-col p-6 md:p-8 ${shake ? "animate-[shake_0.3s]" : ""}`}
             >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login">로그인</TabsTrigger>
-                <TabsTrigger value="signup">회원가입</TabsTrigger>
-              </TabsList>
+              <div className="flex h-[72px] flex-col items-center justify-center gap-2 text-center">
+                <h1 className="text-2xl font-bold">
+                  {mode === "login" ? "다시 오셨네요" : "계정을 만들어보세요"}
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  스톡앤메이크에 로그인하여 관리하세요
+                </p>
+              </div>
 
-              <TabsContent value="login" className="mt-4 min-h-[240px]">
-                <form onSubmit={onSubmit} className="space-y-4">
-                  <div className="space-y-2">
-                    <label htmlFor="email" className="text-sm font-medium">
-                      이메일
-                    </label>
-                    <AppInput
-                      id="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      type="email"
-                      placeholder="you@example.com"
-                      required
-                      autoComplete="email"
-                      disabled={loading}
-                    />
+              <Tabs
+                value={mode}
+                onValueChange={(v) => {
+                  setMode(v as "login" | "signup")
+                  setMessage(null)
+                  setErrorType(null)
+                }}
+                className="mt-6 flex flex-1 flex-col"
+              >
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="login">로그인</TabsTrigger>
+                  <TabsTrigger value="signup">회원가입</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="login" className="mt-2 flex flex-1 flex-col">
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">이메일</label>
+                      <Input
+                        ref={emailRef}
+                        value={loginEmail}
+                        onChange={(e) => {
+                          setLoginEmail(e.target.value)
+                          setErrorType(null)
+                          setMessage(null)
+                        }}
+                        type="email"
+                        required
+                        disabled={loading}
+                        className={
+                          errorType === "email"
+                            ? "border-destructive focus-visible:ring-destructive"
+                            : ""
+                        }
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">비밀번호</label>
+                      <Input
+                        ref={passwordRef}
+                        value={loginPassword}
+                        onChange={(e) => {
+                          setLoginPassword(e.target.value)
+                          setErrorType(null)
+                          setMessage(null)
+                        }}
+                        type="password"
+                        required
+                        disabled={loading}
+                        className={
+                          errorType === "password"
+                            ? "border-destructive focus-visible:ring-destructive"
+                            : ""
+                        }
+                      />
+                    </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <label htmlFor="password" className="text-sm font-medium">
-                      비밀번호
-                    </label>
-                    <AppInput
-                      id="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      type="password"
-                      placeholder="비밀번호"
-                      required
-                      autoComplete="current-password"
-                      disabled={loading}
-                    />
-                  </div>
+                  <div className="mt-6 space-y-2">
+                    <div className="h-5 text-center text-sm font-medium text-destructive">
+                      {mode === "login" ? message : ""}
+                    </div>
 
-                  <AppButton type="submit" disabled={loading} className="w-full">
-                    {loading ? "처리 중..." : "로그인"}
-                  </AppButton>
-
-                  {/* 비밀번호 찾기 */}
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      className="text-sm text-primary underline-offset-4 hover:underline"
-                      onClick={() => {
-                        setForgotOpen((v) => !v)
-                        setForgotMsg("")
-                        setForgotEmail(emailTrimmed || "")
-                      }}
+                    <Button
+                      type="submit"
+                      className="h-11 w-full text-sm font-medium"
                       disabled={loading}
                     >
-                      비밀번호를 잊으셨나요?
-                    </button>
+                      {loading ? "로그인 중..." : "로그인"}
+                    </Button>
+                  </div>
+                </TabsContent>
 
-                    {forgotOpen && (
-                      <div className="mt-3 rounded-md border bg-card p-3">
-                        <div className="space-y-2">
-                          <label htmlFor="forgotEmail" className="text-sm font-medium">
-                            이메일
-                          </label>
-                          <AppInput
-                            id="forgotEmail"
-                            type="email"
-                            value={forgotEmail}
-                            onChange={(e) => setForgotEmail(e.target.value)}
-                            placeholder="you@example.com"
-                            autoComplete="email"
-                            disabled={forgotLoading || loading}
-                          />
-                        </div>
+                <TabsContent value="signup" className="mt-2 flex flex-1 flex-col">
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">이메일</label>
+                      <Input
+                        value={signupEmail}
+                        onChange={(e) => {
+                          setSignupEmail(e.target.value)
+                          setErrorType(null)
+                          setMessage(null)
+                        }}
+                        type="email"
+                        required
+                        disabled={loading}
+                        className={
+                          errorType === "email"
+                            ? "border-destructive focus-visible:ring-destructive"
+                            : ""
+                        }
+                      />
+                    </div>
 
-                        <div className="mt-3 flex gap-2">
-                          <AppButton
-                            type="button"
-                            onClick={sendResetEmail}
-                            disabled={forgotLoading || loading}
-                            className="flex-1"
-                          >
-                            {forgotLoading ? "전송 중..." : "재설정 메일 보내기"}
-                          </AppButton>
-                          <AppButton
-                            type="button"
-                            variant="secondary"
-                            onClick={() => {
-                              setForgotOpen(false)
-                              setForgotMsg("")
-                            }}
-                            className="flex-1"
-                          >
-                            닫기
-                          </AppButton>
-                        </div>
-
-                        {forgotMsg && (
-                          <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                            {forgotMsg}
-                          </div>
-                        )}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">비밀번호</label>
+                        <Input
+                          ref={passwordRef}
+                          value={signupPassword}
+                          onChange={(e) => {
+                            setSignupPassword(e.target.value)
+                            setErrorType(null)
+                            setMessage(null)
+                          }}
+                          type="password"
+                          required
+                          disabled={loading}
+                          className={
+                            errorType === "password"
+                              ? "border-destructive focus-visible:ring-destructive"
+                              : ""
+                          }
+                        />
                       </div>
-                    )}
-                  </div>
 
-                  {/* 메시지 */}
-                  {message && (
-                    <div className={`rounded-md border px-3 py-2 text-sm ${message ? "text-muted-foreground" : "text-transparent"}`}>
-                      {message || "placeholder"}
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">비밀번호 확인</label>
+                        <Input
+                          value={confirmPassword}
+                          onChange={(e) => {
+                            setConfirmPassword(e.target.value)
+                            setErrorType(null)
+                            setMessage(null)
+                          }}
+                          type="password"
+                          required
+                          disabled={loading}
+                          className={
+                            errorType === "password"
+                              ? "border-destructive focus-visible:ring-destructive"
+                              : ""
+                          }
+                        />
+                      </div>
                     </div>
-                  )}
-                </form>
-              </TabsContent>
 
-              <TabsContent value="signup" className="mt-4 min-h-[240px]">
-                <form onSubmit={onSubmit} className="space-y-4">
-                  <div className="space-y-2">
-                    <label htmlFor="email2" className="text-sm font-medium">
-                      이메일
-                    </label>
-                    <AppInput
-                      id="email2"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      type="email"
-                      placeholder="you@example.com"
-                      required
-                      autoComplete="email"
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label htmlFor="password2" className="text-sm font-medium">
-                      비밀번호
-                    </label>
-                    <AppInput
-                      id="password2"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      type="password"
-                      placeholder="비밀번호"
-                      required
-                      autoComplete="new-password"
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <AppButton type="submit" disabled={loading} className="w-full">
-                    {loading ? "처리 중..." : "회원가입"}
-                  </AppButton>
-
-                  {message && (
-                    <div className={`rounded-md border px-3 py-2 text-sm ${message ? "text-muted-foreground" : "text-transparent"}`}>
-                      {message || "placeholder"}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">초대코드</label>
+                      <Input
+                        value={inviteCode}
+                        onChange={(e) => {
+                          setInviteCode(e.target.value)
+                          setMessage(null)
+                        }}
+                        required
+                        disabled={loading}
+                      />
                     </div>
-                  )}
-                </form>
-              </TabsContent>
-            </Tabs>
-          </div>
-        </AppCard>
+                  </div>
 
-        <div className="mt-6 text-center text-xs text-muted-foreground">
+                  <div className="mt-6 space-y-2">
+                    <div className="h-5 text-center text-sm font-medium text-destructive">
+                      {mode === "signup" ? message : ""}
+                    </div>
+
+                    <Button
+                      type="submit"
+                      className="h-11 w-full text-sm font-medium"
+                      disabled={loading}
+                    >
+                      {loading ? "가입 중..." : "회원가입"}
+                    </Button>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </form>
+
+            <div className="relative hidden overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,252,0.96)_0%,rgba(248,248,241,0.98)_100%)] md:block">
+              {/* 배경 레이어 */}
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(164,196,152,0.20),transparent_35%),radial-gradient(circle_at_bottom_left,rgba(255,237,214,0.42),transparent_30%)]" />
+              <div className="absolute inset-y-0 left-0 w-px bg-border/70" />
+
+              <div className="relative flex h-full flex-col justify-between px-12 py-12">
+                {/* 상단 */}
+                <div className="space-y-5">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-border/70 bg-background/90 shadow-sm">
+                      <img
+                        src="/logo.png"
+                        alt="스톡앤메이크 로고"
+                        className="h-9 w-9 object-contain"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                        Stock &amp; Make
+                      </div>
+                      <div className="text-base font-semibold text-foreground">
+                        스몰 브랜드 운영을 위한 워크스페이스
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mx-auto mb-6 w-full max-w-[360px]">
+                    <p className="text-center text-sm leading-6 text-muted-foreground">
+                      재고, 제작, 정산을 하나의 흐름으로 관리하세요.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 하단 */}
+                <div className="space-y-4">
+                  <div className="mx-auto w-full max-w-[360px] rounded-2xl border border-border/60 bg-white/88 p-5 shadow-sm backdrop-blur-sm">
+                    <div className="mb-4 text-xs font-semibold uppercase tracking-[0.14em] text-[#6f7768]">
+                      핵심 기능
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="flex items-start gap-3 rounded-xl border border-[#ecebe5] bg-[#fffefa] px-4 py-3 shadow-[0_2px_10px_rgba(120,146,110,0.04)]">
+                        <div className="mt-1.5 h-2 w-2 rounded-full bg-primary" />
+                        <div>
+                          <div className="text-sm font-medium text-foreground">입점처별 재고 관리</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                            입점처 재고 목록을 한 화면에서 정리
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3 rounded-xl border border-[#ecebe5] bg-[#fffefa] px-4 py-3 shadow-[0_2px_10px_rgba(120,146,110,0.04)]">
+                        <div className="mt-1.5 h-2 w-2 rounded-full bg-primary" />
+                        <div>
+                          <div className="text-sm font-medium text-foreground">정산 자동 계산</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                            판매총액, 정산금, 순마진을 한 눈에 확인
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3 rounded-xl border border-[#ecebe5] bg-[#fffefa] px-4 py-3 shadow-[0_2px_10px_rgba(120,146,110,0.04)]">
+                        <div className="mt-1.5 h-2 w-2 rounded-full bg-primary" />
+                        <div>
+                          <div className="text-sm font-medium text-foreground">제작 수량 추적</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                            필요한 제작 수량을 입점처 기준으로 관리
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3 rounded-xl border border-[#ecebe5] bg-[#fffefa] px-4 py-3 shadow-[0_2px_10px_rgba(120,146,110,0.04)]">
+                        <div className="mt-1.5 h-2 w-2 rounded-full bg-primary" />
+                        <div>
+                          <div className="text-sm font-medium text-foreground">엑셀 업로드 지원</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                            재고·제작·정산 데이터를 손쉽게 업로드
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="text-center text-xs text-muted-foreground">
           Stock &amp; Make · 클로즈 베타
         </div>
       </div>
