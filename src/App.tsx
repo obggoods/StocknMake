@@ -176,17 +176,7 @@ export default function App() {
     return <AppLoadingScreen message="초대 여부를 확인하고 있어요" />
   }
 
-  if (!isAdmin && profile.is_invited !== true) {
-    return (
-      <Suspense fallback={<AppLoadingScreen message="화면을 불러오고 있어요" />}>
-        <Routes>
-          <Route path="/invite" element={<InviteGatePage />} />
-          <Route path="*" element={<Navigate to="/invite" replace />} />
-        </Routes>
-      </Suspense>
-    )
-  }
-
+  // 그냥 통과
   // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
 
   return (

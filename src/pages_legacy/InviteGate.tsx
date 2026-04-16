@@ -1,3 +1,4 @@
+import { AuthLayout } from "@/components/auth/AuthLayout"
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 
@@ -47,55 +48,49 @@ export default function InviteGate() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground grid place-items-center px-4 py-10">
-      <div className="w-full max-w-md">
-        <AppCard className="p-6">
-          <div className="space-y-2">
-            <h1 className="text-xl font-semibold">초대코드 입력</h1>
-            <p className="text-sm text-muted-foreground">
-              베타 테스트는 초대된 사용자만 이용할 수 있어요.
-              <br />
-              초대코드를 입력해 주세요.
-            </p>
-          </div>
-
-          <div className="mt-6 space-y-3">
-            <AppInput
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="초대코드"
-              disabled={busy}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit()
-              }}
-              className="w-full"
-            />
-
-            <AppButton
-              type="button"
-              onClick={submit}
-              disabled={busy || !trimmed}
-              className="w-full"
-            >
-              {busy ? "확인 중..." : "확인"}
-            </AppButton>
-
-            {msg && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {msg}
-              </div>
-            )}
-          </div>
-
-          <div className="mt-6 text-xs text-muted-foreground">
-            문제가 계속되면 초대코드를 다시 확인하거나 관리자에게 문의해 주세요.
-          </div>
-        </AppCard>
-
-        <div className="mt-6 text-center text-xs text-muted-foreground">
-          Stock &amp; Make · 클로즈 베타
+    <AuthLayout>
+      <AppCard className="p-6">
+        <div className="space-y-2">
+          <h1 className="text-xl font-semibold">초대코드 입력</h1>
+          <p className="text-sm text-muted-foreground">
+            베타 테스트는 초대된 사용자만 이용할 수 있어요.
+            <br />
+            초대코드를 입력해 주세요.
+          </p>
         </div>
-      </div>
-    </div>
+
+        <div className="mt-6 space-y-3">
+          <AppInput
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="초대코드"
+            disabled={busy}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit()
+            }}
+            className="w-full"
+          />
+
+          <AppButton
+            type="button"
+            onClick={submit}
+            disabled={busy || !trimmed}
+            className="w-full"
+          >
+            {busy ? "확인 중..." : "확인"}
+          </AppButton>
+
+          {msg && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {msg}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 text-xs text-muted-foreground">
+          문제가 계속되면 초대코드를 다시 확인하거나 관리자에게 문의해 주세요.
+        </div>
+      </AppCard>
+    </AuthLayout>
   )
 }
