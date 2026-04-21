@@ -61,7 +61,8 @@ jobs:
       - name: Upload to Supabase Storage
         run: |
           BACKUP_NAME="backup-$(date +%F-%H%M%S).sql"
-          curl --fail --show-error -X POST "$SUPABASE_URL/storage/v1/object/backups/$BACKUP_NAME" \
+          curl --fail-with-body --show-error -X PUT "$SUPABASE_URL/storage/v1/object/backups/$BACKUP_NAME" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/octet-stream" \
+            -H "x-upsert: true" \
             --data-binary "@backup.sql"
