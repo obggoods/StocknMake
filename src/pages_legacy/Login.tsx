@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useRef, useState, type FormEvent } from "react"
 import { supabase } from "../lib/supabaseClient"
 
 import { Card, CardContent } from "@/components/ui/card"
@@ -16,13 +16,13 @@ export default function LoginPage() {
   const [signupEmail, setSignupEmail] = useState("")
   const [signupPassword, setSignupPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
-  const [inviteCode, setInviteCode] = useState("")
 
   const emailRef = useRef<HTMLInputElement | null>(null)
   const passwordRef = useRef<HTMLInputElement | null>(null)
 
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [messageType, setMessageType] = useState<"error" | "success">("error")
   const [shake, setShake] = useState(false)
 
   const triggerShake = () => {
@@ -30,20 +30,15 @@ export default function LoginPage() {
     window.setTimeout(() => setShake(false), 300)
   }
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setMessage(null)
+    setMessageType("error")
     setErrorType(null)
 
     try {
       if (mode === "signup") {
-        if (!inviteCode.trim()) {
-          setMessage("초대코드를 입력해 주세요.")
-          setLoading(false)
-          return
-        }
-
         if (signupPassword !== confirmPassword) {
           setMessage("비밀번호가 일치하지 않아요.")
           setErrorType("password")
@@ -52,14 +47,19 @@ export default function LoginPage() {
           return
         }
 
-        const { error: signUpError } = await supabase.auth.signUp({
-          email: signupEmail,
+        const normalizedSignupEmail = signupEmail.trim().toLowerCase()
+
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email: normalizedSignupEmail,
           password: signupPassword,
+          options: {
+            emailRedirectTo: `${window.location.origin}/login`,
+          },
         })
 
         if (signUpError) {
           if (signUpError.message.includes("User already registered")) {
-            setMessage("이미 가입된 이메일입니다.")
+            setMessage("이미 가입된 이메일입니다. 로그인 후 초대코드를 입력해 주세요.")
             setErrorType("email")
             emailRef.current?.focus()
           } else if (signUpError.message.includes("Password")) {
@@ -74,48 +74,28 @@ export default function LoginPage() {
           return
         }
 
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: signupEmail,
-          password: signupPassword,
-        })
-
-        if (signInError) {
-          setMessage("회원가입 후 로그인 처리 중 오류가 발생했습니다.")
-          triggerShake()
+        // 이메일 인증이 켜져 있으면 session이 없습니다.
+        // 이 경우 즉시 로그인하지 않고, 이메일 인증 후 로그인하도록 안내합니다.
+        if (!signUpData.session) {
+          setSignupPassword("")
+          setConfirmPassword("")
+          setLoginEmail(normalizedSignupEmail)
+          setMode("login")
+          setMessageType("success")
+          setMessage("회원가입 신청이 완료됐어요. 이메일 인증 후 로그인해 주세요.")
           setLoading(false)
           return
         }
 
-        const { data, error } = await supabase.rpc("redeem_invite", {
-          p_code: inviteCode.trim(),
-        })
-
-        if (error) throw error
-
-        if (!data?.ok) {
-          const rpcError = data?.error ?? "unknown"
-
-          if (rpcError === "invalid_code") {
-            setMessage("초대코드가 올바르지 않아요.")
-          } else if (rpcError === "already_used") {
-            setMessage("이미 사용된 초대코드예요.")
-          } else {
-            setMessage("초대코드 처리 중 오류가 발생했어요.")
-          }
-
-          await supabase.auth.signOut()
-          triggerShake()
-          setLoading(false)
-          return
-        }
-
-        window.location.href = "/dashboard"
+        // 이메일 인증이 꺼진 환경에서는 signUp 직후 세션이 생길 수 있습니다.
+        // 초대코드는 회원가입 화면이 아니라 /invite 화면에서 한 번만 입력합니다.
+        window.location.href = "/invite"
         return
       }
 
       if (mode === "login") {
         const { error } = await supabase.auth.signInWithPassword({
-          email: loginEmail,
+          email: loginEmail.trim().toLowerCase(),
           password: loginPassword,
         })
 
@@ -173,6 +153,7 @@ export default function LoginPage() {
                 onValueChange={(v) => {
                   setMode(v as "login" | "signup")
                   setMessage(null)
+                  setMessageType("error")
                   setErrorType(null)
                 }}
                 className="mt-6 flex flex-1 flex-col"
@@ -228,7 +209,10 @@ export default function LoginPage() {
                   </div>
 
                   <div className="mt-6 space-y-2">
-                    <div className="h-5 text-center text-sm font-medium text-destructive">
+                    <div
+                      className={`min-h-5 text-center text-sm font-medium ${messageType === "success" ? "text-primary" : "text-destructive"
+                        }`}
+                    >
                       {mode === "login" ? message : ""}
                     </div>
 
@@ -306,23 +290,13 @@ export default function LoginPage() {
                         />
                       </div>
                     </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">초대코드</label>
-                      <Input
-                        value={inviteCode}
-                        onChange={(e) => {
-                          setInviteCode(e.target.value)
-                          setMessage(null)
-                        }}
-                        required
-                        disabled={loading}
-                      />
-                    </div>
                   </div>
 
                   <div className="mt-6 space-y-2">
-                    <div className="h-5 text-center text-sm font-medium text-destructive">
+                    <div
+                      className={`min-h-5 text-center text-sm font-medium ${messageType === "success" ? "text-primary" : "text-destructive"
+                        }`}
+                    >
                       {mode === "signup" ? message : ""}
                     </div>
 
@@ -339,12 +313,10 @@ export default function LoginPage() {
             </form>
 
             <div className="relative hidden overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,252,0.96)_0%,rgba(248,248,241,0.98)_100%)] md:block">
-              {/* 배경 레이어 */}
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(164,196,152,0.20),transparent_35%),radial-gradient(circle_at_bottom_left,rgba(255,237,214,0.42),transparent_30%)]" />
               <div className="absolute inset-y-0 left-0 w-px bg-border/70" />
 
               <div className="relative flex h-full flex-col justify-between px-12 py-12">
-                {/* 상단 */}
                 <div className="space-y-5">
                   <div className="flex items-center gap-3">
                     <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-border/70 bg-background/90 shadow-sm">
@@ -372,7 +344,6 @@ export default function LoginPage() {
                   </div>
                 </div>
 
-                {/* 하단 */}
                 <div className="space-y-4">
                   <div className="mx-auto w-full max-w-[360px] rounded-2xl border border-border/60 bg-white/88 p-5 shadow-sm backdrop-blur-sm">
                     <div className="mb-4 text-xs font-semibold uppercase tracking-[0.14em] text-[#6f7768]">

@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent } from "react"
 import { toast } from "@/lib/toast"
-
+import * as XLSX from "xlsx"
 import type { AppData } from "@/data/models"
 import { downloadJson, generateId, readJsonFile } from "@/data/store"
 import {
@@ -154,15 +154,6 @@ function parseSimpleCSV(text: string): ProductCsvRow[] {
   return rows
 }
 
-function downloadCsv(filename: string, csvBody: string) {
-  const blob = new Blob(["\uFEFF" + csvBody], { type: "text/csv;charset=utf-8;" })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -186,7 +177,6 @@ export function useAppData() {
   const [data, setData] = useState<AppData>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [syncing, setSyncing] = useState(false)
   // ✅ refresh 중복 호출 방지
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const refreshQueuedRef = useRef(false)
@@ -1042,7 +1032,7 @@ const applyCsvProducts = useCallback(
       })
 
       toast.success(
-        `CSV 반영 완료: ${changed.length}건 처리됨` +
+        `파일 반영 완료: ${changed.length}건 처리됨` +
           (overwriteMode === "overwrite" ? " (덮어쓰기 포함)" : " (빈 값만 채움)")
       )
       await refresh()
@@ -1050,7 +1040,7 @@ const applyCsvProducts = useCallback(
       console.error(e)
       setData(prevData)
       setCategories(prevCategories)
-      toast.error(`CSV 업로드 실패: ${e?.message ?? e}`)
+      toast.error(`파일 업로드 실패: ${e?.message ?? e}`)
       await refresh()
     } finally {
       setCsvBusy(false)
@@ -1153,14 +1143,134 @@ if (suspicious.length > 0) {
   [data.products, applyCsvProducts]
 )
 
-const onChangeProductCsv = useCallback(
-  async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    await handleProductCsvFile(file)
-  },
-  [handleProductCsvFile]
-)
+const onChangeProductUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0]
+  if (!file) return
+
+  try {
+    setCsvBusy(true)
+
+    const fileName = file.name.toLowerCase()
+
+    let rows: ProductCsvRow[] = []
+
+    if (fileName.endsWith(".csv")) {
+      const text = await file.text()
+      rows = parseSimpleCSV(text)
+    } else if (fileName.endsWith(".xlsx")) {
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: "array" })
+      const firstSheetName = workbook.SheetNames[0]
+      const firstSheet = workbook.Sheets[firstSheetName]
+
+      const jsonRows = XLSX.utils.sheet_to_json<Record<string, any>>(firstSheet, {
+        defval: "",
+      })
+
+      rows = jsonRows.map((row) => ({
+        category: String(row.category ?? "").trim(),
+        name: String(row.name ?? "").trim(),
+        active: parseBooleanLike(String(row.active ?? "")),
+        price: parseNumberLikeNullable(String(row.price ?? "")),
+        sku: String(row.sku ?? "").trim() || null,
+        barcode: String(row.barcode ?? "").trim() || null,
+      }))
+
+      if (!rows.length) {
+        throw new Error("엑셀 첫 번째 시트에 업로드할 데이터가 없어요.")
+      }
+    } else {
+      throw new Error("CSV 또는 XLSX 파일만 업로드 가능합니다.")
+    }
+
+    const suspicious = rows.filter((r) => {
+      const sku = String(r.sku ?? "").trim()
+      const bc = String(r.barcode ?? "").trim()
+      return /e\+?\d+/i.test(sku) || /e\+?\d+/i.test(bc) || sku.includes(".") || bc.includes(".")
+    })
+
+    if (suspicious.length > 0) {
+      toast.error(
+        "바코드/SKU가 엑셀에서 숫자로 변환된 것 같아요. (예: 8.8E+12) 텍스트 형식으로 저장 후 다시 업로드해 주세요."
+      )
+    }
+
+    const cleaned: ProductCsvRow[] = rows
+      .map((r) => ({
+        category: (r.category ?? "").trim(),
+        name: (r.name ?? "").trim(),
+        active: r.active,
+        price: r.price ?? null,
+        sku: r.sku ?? null,
+        barcode: r.barcode ?? null,
+      }))
+      .filter((r) => r.name.length > 0)
+
+    if (cleaned.length === 0) {
+      toast.error("업로드할 제품이 없습니다. (name이 비어있으면 무시됩니다)")
+      return
+    }
+
+    const byKey = new Map<string, ProductCsvRow>()
+    for (const r of cleaned) {
+      const key = `${normalizeCategoryKey(r.category)}||${normalizeNameKey(r.name)}`
+      byKey.set(key, r)
+    }
+    const uniqueRows: ProductCsvRow[] = Array.from(byKey.values())
+
+    const existing = new Map<string, any>()
+    for (const p of data.products) {
+      const key = `${normalizeCategoryKey(p.category)}||${normalizeNameKey(p.name)}`
+      existing.set(key, p)
+    }
+
+    const conflicts: ProductCsvConflict[] = []
+
+    for (const r of uniqueRows) {
+      const catTrim = (r.category ?? "").trim()
+      const categoryOrNull = catTrim === "" ? null : catTrim
+      const key = `${normalizeCategoryKey(categoryOrNull ?? "")}||${normalizeNameKey(r.name)}`
+      const hit = existing.get(key)
+      if (!hit) continue
+
+      if (typeof r.active === "boolean" && differsCsvValue(Boolean(hit.active), Boolean(r.active))) {
+        conflicts.push({ key, name: r.name, field: "active", oldV: hit.active, newV: r.active })
+      }
+
+      if (r.price !== null && r.price !== undefined) {
+        const oldP = Number(hit.price ?? 0)
+        const newP = Number(r.price ?? 0)
+        if (Number.isFinite(newP) && oldP !== newP) {
+          conflicts.push({ key, name: r.name, field: "price", oldV: hit.price, newV: r.price })
+        }
+      }
+
+      if (isProvidedCsvValue(r.sku) && isProvidedCsvValue(hit.sku) && differsCsvValue(hit.sku, r.sku)) {
+        conflicts.push({ key, name: r.name, field: "sku", oldV: hit.sku, newV: r.sku })
+      }
+
+      if (
+        isProvidedCsvValue(r.barcode) &&
+        isProvidedCsvValue(hit.barcode) &&
+        differsCsvValue(hit.barcode, r.barcode)
+      ) {
+        conflicts.push({ key, name: r.name, field: "barcode", oldV: hit.barcode, newV: r.barcode })
+      }
+    }
+
+    if (conflicts.length > 0) {
+      setCsvConflictInfo({ fileName: file.name, rows: uniqueRows, conflicts })
+      return
+    }
+
+    await applyCsvProducts(uniqueRows, "overwrite")
+  } catch (err: any) {
+    toast.error(err?.message ?? "제품 파일 업로드에 실패했어요.")
+  } finally {
+    setCsvBusy(false)
+    if (e.target) e.target.value = ""
+  }
+}
 
 const resolveProductCsvConflict = useCallback(
   async (mode: "overwrite" | "safe") => {
@@ -1317,7 +1427,7 @@ const cancelProductCsvConflict = useCallback(() => {
     csvBusy,
     csvConflictInfo,
     handleProductCsvUpload,
-    onChangeProductCsv,
+    onChangeProductUpload,
     resolveProductCsvConflict,
     cancelProductCsvConflict,
 

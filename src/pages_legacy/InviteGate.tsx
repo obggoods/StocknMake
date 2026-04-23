@@ -46,7 +46,10 @@ export default function InviteGate() {
       setBusy(false)
     }
   }
-
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    window.location.href = "/login"
+  }
   return (
     <AuthLayout>
       <AppCard className="p-6">
@@ -85,6 +88,15 @@ export default function InviteGate() {
               {msg}
             </div>
           )}
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-sm text-muted-foreground hover:underline"
+            >
+              다른 계정으로 로그인
+            </button>
+          </div>
         </div>
 
         <div className="mt-6 text-xs text-muted-foreground">

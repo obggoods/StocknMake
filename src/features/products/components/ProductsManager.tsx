@@ -1,7 +1,7 @@
 // src/features/products/components/ProductsManager.tsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import type { ChangeEvent } from "react"
-
+import * as XLSX from "xlsx"
 import ProductRowActions from "@/features/products/components/ProductRowActions"
 
 import { AppButton } from "@/components/app/AppButton"
@@ -118,29 +118,52 @@ export default function ProductsManager() {
   const [editingSku, setEditingSku] = useState<string>("")
   const [editingBarcode, setEditingBarcode] = useState<string>("")
 
-  // ====== 제품 CSV 템플릿 다운로드 (A 전용) ======
-  const downloadProductsCsvTemplate = () => {
-    // 지시서 목적: 신규 생성/업데이트 모두 커버
-    // category/name은 매칭 키. overwrite/safe는 useAppData 내부 confirm에서 결정.
-    const body =
-      "category,name,price,sku,barcode,active\n" +
-      "상의,미드나잇블루 티셔츠,12000,SKU-001,8801234567890,true\n" +
-      "하의,오프화이트 팬츠,39000,SKU-002,8801234567891,true\n"
-    const blob = new Blob(["\uFEFF" + body], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const aTag = document.createElement("a")
-    aTag.href = url
-    aTag.download = "products_upload_template.csv"
-    aTag.click()
-    URL.revokeObjectURL(url)
-    toast.success("제품 CSV 템플릿을 다운로드했어요.")
+  const downloadProductsExcelTemplate = () => {
+    const dataSheet = XLSX.utils.aoa_to_sheet([
+      ["category", "name", "price", "sku", "barcode", "active"],
+      ["상의", "미드나잇블루 티셔츠", 12000, "SKU-001", "8801234567890", true],
+      ["하의", "오프화이트 팬츠", 39000, "SKU-002", "8801234567891", true],
+    ])
+
+    dataSheet["!cols"] = [
+      { wch: 18 }, // category
+      { wch: 28 }, // name
+      { wch: 12 }, // price
+      { wch: 18 }, // sku
+      { wch: 22 }, // barcode
+      { wch: 10 }, // active
+    ]
+
+    const guideSheet = XLSX.utils.aoa_to_sheet([
+      ["제품 업로드 가이드"],
+      [""],
+      ["1. 첫 번째 시트의 헤더(category,name,price,sku,barcode,active)는 수정하지 마세요."],
+      ["2. name은 필수입니다."],
+      ["3. active는 true / false 또는 활성 / 비활성으로 입력할 수 있습니다."],
+      ["4. price는 숫자만 입력하세요. 빈 칸이면 기존 값을 유지합니다."],
+      ["5. sku / barcode는 비워두면 기존 값을 유지합니다."],
+      ["6. category는 자유롭게 입력할 수 있습니다."],
+      [""],
+      ["예시"],
+      ["- 신규 제품 추가 가능"],
+      ["- 기존 제품(category + name 동일) 업데이트 가능"],
+    ])
+
+    guideSheet["!cols"] = [{ wch: 100 }]
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, dataSheet, "제품 업로드")
+    XLSX.utils.book_append_sheet(wb, guideSheet, "사용 가이드")
+
+    XLSX.writeFile(wb, "products_excel_template.xlsx")
+    toast.success("제품 엑셀 템플릿을 다운로드했어요.")
   }
 
-  // ====== A 전용: CSV 업로드 change 핸들러 (useAppData가 제공하면 위임) ======
-  const onChangeProductCsv = async (e: ChangeEvent<HTMLInputElement>) => {
-    const handler = (a as any)?.onChangeProductCsv as ((e: ChangeEvent<HTMLInputElement>) => Promise<void>) | undefined
+  // ====== 제품 업로드 change 핸들러 (useAppData가 제공하면 위임) ======
+  const onChangeProductUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const handler = (a as any)?.onChangeProductUpload as ((e: ChangeEvent<HTMLInputElement>) => Promise<void>) | undefined
     if (!handler) {
-      toast.error("CSV 업로드 핸들러가 연결되지 않았어요. (useAppData.ts 확인 필요)")
+      toast.error("제품 업로드 핸들러가 연결되지 않았어요. (useAppData.ts 확인 필요)")
       // input reset
       if (e.target) e.target.value = ""
       return
@@ -241,8 +264,8 @@ export default function ProductsManager() {
       return next
     })
 
-  // ✅ 연속 조작 후 멈췄을 때 자동 저장
-  scheduleAutoSave()
+    // ✅ 연속 조작 후 멈췄을 때 자동 저장
+    scheduleAutoSave()
   }
 
   // ====== Save all dirty changes ======
@@ -255,10 +278,10 @@ export default function ProductsManager() {
   const saveAllDirty = useCallback(async () => {
     const dirty = Array.from(dirtyMapRef.current.values())
     if (dirty.length === 0) return
-  
+
     try {
       setAutoSaving(true)
-  
+
       await upsertProductsBulkDB({
         products: dirty.map((p: any) => ({
           id: p.id,
@@ -271,12 +294,12 @@ export default function ProductsManager() {
           barcode: p.barcode ?? null,
         })),
       })
-  
+
       // ✅ 저장 완료되면 dirty 비우기
       dirtyMapRef.current = new Map()
       setDirtyCount(0)
       setLastSavedAt(Date.now())
-  
+
       // ✅ DB 최신값 동기화(너무 자주 치지 않게, 여기선 1회만)
       await a.refresh()
     } catch (e: any) {
@@ -289,14 +312,14 @@ export default function ProductsManager() {
 
   const scheduleAutoSave = useCallback(() => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
-  
+
     // 마지막 조작 후 800ms 지나면 1번만 저장
     autoSaveTimerRef.current = setTimeout(() => {
       autoSaveTimerRef.current = null
       saveAllDirty()
     }, 800)
   }, [saveAllDirty])
-  
+
   useEffect(() => {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
@@ -338,7 +361,7 @@ export default function ProductsManager() {
     <div className="space-y-6">
       {a.loading && <div className="text-sm text-muted-foreground">동기화 중…</div>}
 
-      {/* ✅ A 전용: CSV overwrite/safe confirm */}
+      {/* ✅ 제품 업로드 충돌 확인 다이얼로그 */}
       <ConfirmDialog
         open={csvConflictOpen}
         onOpenChange={(open) => {
@@ -360,44 +383,44 @@ export default function ProductsManager() {
 
       {/* 상단: 저장/선택삭제 */}
       <div className="flex flex-wrap items-center gap-2">
-  <div className="text-sm text-muted-foreground">
-    {autoSaving ? (
-      "동기화 중…"
-    ) : dirtyCount > 0 ? (
-      "변경됨 (곧 자동 저장)"
-    ) : lastSavedAt ? (
-      "저장됨"
-    ) : (
-      " "
-    )}
-  </div>
+        <div className="text-sm text-muted-foreground">
+          {autoSaving ? (
+            "동기화 중…"
+          ) : dirtyCount > 0 ? (
+            "변경됨 (곧 자동 저장)"
+          ) : lastSavedAt ? (
+            "저장됨"
+          ) : (
+            " "
+          )}
+        </div>
 
-  {selectedCount > 0 ? (
-    <AppButton
-      type="button"
-      variant="outline"
-      className="text-destructive"
-      onClick={() => setBulkDeleteOpen(true)}
-    >
-      선택 삭제 ({selectedCount})
-    </AppButton>
-  ) : null}
-</div>
+        {selectedCount > 0 ? (
+          <AppButton
+            type="button"
+            variant="outline"
+            className="text-destructive"
+            onClick={() => setBulkDeleteOpen(true)}
+          >
+            선택 삭제 ({selectedCount})
+          </AppButton>
+        ) : null}
+      </div>
 
-      {/* 제품 추가 / CSV (A만 유지) */}
+      {/* 제품 추가 / 파일 업로드 */}
       <div className="rounded-xl border bg-card/60 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-sm font-semibold">제품 추가</div>
             <div className="text-xs text-muted-foreground">
-              제품을 직접 추가하거나 CSV로 일괄 업로드/업데이트할 수 있어요.
+              제품을 직접 추가하거나 엑셀로 일괄 업로드/업데이트할 수 있어요.
             </div>
           </div>
 
           {/* ✅ A 전용 버튼/인풋 */}
           <div className="flex flex-wrap items-center gap-2">
-            <AppButton type="button" variant="outline" onClick={downloadProductsCsvTemplate}>
-              제품 CSV 템플릿 다운로드
+            <AppButton type="button" variant="outline" onClick={downloadProductsExcelTemplate}>
+              제품 엑셀 템플릿 다운로드
             </AppButton>
 
             <AppButton
@@ -406,22 +429,22 @@ export default function ProductsManager() {
               onClick={() => csvInputRef.current?.click()}
               disabled={Boolean((a as any)?.csvBusy)}
             >
-              제품 CSV 업로드/업데이트
+              제품 파일 업로드/업데이트
             </AppButton>
 
             <input
               ref={csvInputRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx"
+              onChange={onChangeProductUpload}
               className="hidden"
-              onChange={onChangeProductCsv}
             />
           </div>
         </div>
 
         <p className="text-xs text-muted-foreground">
-  ※ barcode/SKU는 엑셀에서 “텍스트” 형식으로 입력하세요. 숫자로 저장되면 앞자리 0이 사라지거나 8.8E+12(과학적 표기)로 변환될 수 있어요.
-</p>
+          ※ barcode/SKU는 엑셀에서 “텍스트” 형식으로 입력하세요. 숫자로 저장되면 앞자리 0이 사라지거나 8.8E+12(과학적 표기)로 변환될 수 있어요.
+        </p>
 
         {/* 제품 수동 추가 UI */}
         <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -452,19 +475,19 @@ export default function ProductsManager() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault()
-                    
+
                         const v = a.newCategory.trim()
                         if (!v) return
-                    
+
                         // 1) 새 카테고리 저장 시도 (중복이어도 upsert면 안전)
                         void a.saveCategoryOnly()
-                    
+
                         // 2) 선택 확정 + 닫기
                         a.setCategoryTyped(false)
                         a.setNewCategory(v)
                         a.setCategoryOpen(false)
                       }
-                    
+
                       // ESC로 닫기 (UX)
                       if (e.key === "Escape") {
                         a.setCategoryTyped(false)
@@ -495,7 +518,7 @@ export default function ProductsManager() {
                               a.setCategoryTyped(false)
                               a.setNewCategory(c)
                               a.setCategoryOpen(false)
-                            
+
                               // ✅ 선택 후 제품명 입력으로 이동
                               requestAnimationFrame(() => {
                                 const el = document.getElementById("product-name-input") as HTMLInputElement | null
@@ -653,14 +676,14 @@ export default function ProductsManager() {
                         <TableCell className={`${COL.category} align-middle px-2 py-2 text-center`}>
                           {isEditing ? (
                             <AppSelect
-                            value={a.editingProductCategory || ""}
-                            onValueChange={(v) => a.setEditingProductCategory(v)}
-                            options={[
-                              { value: "", label: "미분류" },
-                              ...a.categories.map((name) => ({ value: name, label: name })),
-                            ]}
-                            className="flex items-center h-full"
-                          />
+                              value={a.editingProductCategory || ""}
+                              onValueChange={(v) => a.setEditingProductCategory(v)}
+                              options={[
+                                { value: "", label: "미분류" },
+                                ...a.categories.map((name) => ({ value: name, label: name })),
+                              ]}
+                              className="flex items-center h-full"
+                            />
                           ) : (
                             <AppBadge variant="outline" className="max-w-[96px] truncate">
                               {p.category ? p.category : "미분류"}
@@ -671,11 +694,11 @@ export default function ProductsManager() {
                         <TableCell className={`${COL.name} align-middle px-2 py-2`}>
                           {isEditing ? (
                             <AppInput
-                            className="flex items-center h-full"
-                            value={a.editingProductName}
-                            onChange={(e) => a.setEditingProductName(e.target.value)}
-                            placeholder="제품명"
-                          />
+                              className="flex items-center h-full"
+                              value={a.editingProductName}
+                              onChange={(e) => a.setEditingProductName(e.target.value)}
+                              placeholder="제품명"
+                            />
                           ) : (
                             <div className="min-w-0 flex items-center gap-2">
                               <div className="truncate text-sm font-medium">{p.name}</div>
@@ -691,16 +714,16 @@ export default function ProductsManager() {
                         <TableCell className={`${COL.price} align-middle px-1 py-2 text-right whitespace-nowrap`}>
                           {isEditing ? (
                             <AppInput
-                            className="flex items-center h-full"
-                            type="number"
-                            inputMode="numeric"
-                            value={String(editingPrice)}
-                            onChange={(e) => {
-                              const v = e.target.value
-                              setEditingPrice(v === "" ? 0 : Math.max(0, parseInt(v, 10) || 0))
-                            }}
-                            placeholder="0"
-                          />
+                              className="flex items-center h-full"
+                              type="number"
+                              inputMode="numeric"
+                              value={String(editingPrice)}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setEditingPrice(v === "" ? 0 : Math.max(0, parseInt(v, 10) || 0))
+                              }}
+                              placeholder="0"
+                            />
                           ) : (
                             <span className="tabular-nums">{(p.price ?? 0).toLocaleString("ko-KR")}</span>
                           )}
@@ -709,11 +732,11 @@ export default function ProductsManager() {
                         <TableCell className={`${COL.sku} align-middle px-2 py-2 text-center`}>
                           {isEditing ? (
                             <AppInput
-                            className="flex items-center h-full"
-                            value={editingSku}
-                            onChange={(e) => setEditingSku(e.target.value)}
-                            placeholder="-"
-                          />
+                              className="flex items-center h-full"
+                              value={editingSku}
+                              onChange={(e) => setEditingSku(e.target.value)}
+                              placeholder="-"
+                            />
                           ) : (
                             <span className="truncate block">{p.sku ? p.sku : "-"}</span>
                           )}
@@ -722,11 +745,11 @@ export default function ProductsManager() {
                         <TableCell className={`${COL.barcode} align-middle px-2 py-2 text-center`}>
                           {isEditing ? (
                             <AppInput
-                            className="flex items-center h-full"
-                            value={editingBarcode}
-                            onChange={(e) => setEditingBarcode(e.target.value)}
-                            placeholder="-"
-                          />
+                              className="flex items-center h-full"
+                              value={editingBarcode}
+                              onChange={(e) => setEditingBarcode(e.target.value)}
+                              placeholder="-"
+                            />
                           ) : (
                             <span className="truncate block">{p.barcode ? p.barcode : "-"}</span>
                           )}
@@ -734,7 +757,7 @@ export default function ProductsManager() {
 
                         <TableCell className={`${COL.status} align-middle px-2 py-2`}>
                           <div className="flex items-center justify-center gap-3">
-                          <div className="flex items-center gap-2 whitespace-nowrap">
+                            <div className="flex items-center gap-2 whitespace-nowrap">
                               <AppSwitch
                                 checked={Boolean(p.active)}
                                 onCheckedChange={(v) => patchProduct(id, { active: Boolean(v) })}
