@@ -148,6 +148,33 @@ export async function upsertMyMarginProduct(input: {
   return data as MarginProductRow
 }
 
+export async function updateMyMarginProductData(input: {
+  id: string
+  name: string
+  memo?: string
+  data: any
+}) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const { data, error } = await supabase
+    .from("margin_products")
+    .update({
+      name: input.name,
+      memo: input.memo ?? null,
+      data: input.data ?? {},
+    })
+    .eq("id", input.id)
+    .eq("user_id", user.id)
+    .select("id,user_id,name,memo,data,created_at,updated_at")
+    .single()
+
+  if (error) throw error
+  return data as MarginProductRow
+}
+
 export async function deleteMyMarginProduct(id: string) {
   const { data: authData, error: authErr } = await supabase.auth.getUser()
   if (authErr) throw authErr

@@ -1,6 +1,8 @@
+import { AppButton } from "@/components/app/AppButton"
 import { AppCard } from "@/components/app/AppCard"
 import { AppInput } from "@/components/app/AppInput"
 import { Label } from "@/components/ui/label"
+import { RefreshCw, Save } from "lucide-react"
 
 type StoreRow = {
     id: string
@@ -129,6 +131,11 @@ export default function CostSimulationCard(props: {
     onSelectedStoreIdChange: (value: string) => void
     manualCommissionRate: string
     onManualCommissionRateChange: (value: string) => void
+    simulationSellingPrice: string
+    onSimulationSellingPriceChange: (value: string) => void
+    onApplySimulationSellingPrice: () => void
+    onResetSimulation: () => void
+    applyingSimulationPrice: boolean
 }) {
     const {
         profiles,
@@ -139,6 +146,11 @@ export default function CostSimulationCard(props: {
         onSelectedStoreIdChange,
         manualCommissionRate,
         onManualCommissionRateChange,
+        simulationSellingPrice,
+        onSimulationSellingPriceChange,
+        onApplySimulationSellingPrice,
+        onResetSimulation,
+        applyingSimulationPrice,
     } = props
 
     const selectedProfile =
@@ -152,7 +164,8 @@ export default function CostSimulationCard(props: {
             ? clamp(toNumber(manualCommissionRate), 0, 100)
             : clamp(Number(selectedStore?.commission_rate ?? selectedProfile?.salesCommissionRate ?? 0), 0, 100)
 
-    const sellingPrice = Number(selectedProfile?.sellingPrice ?? 0)
+    const originalSellingPrice = Number(selectedProfile?.sellingPrice ?? 0)
+    const sellingPrice = selectedProfile ? clamp(toNumber(simulationSellingPrice), 0) : 0
     const vatRate = Number(selectedProfile?.vatRate ?? 10)
     const cogs = selectedProfile ? calcCOGS(selectedProfile) : 0
     const commission = sellingPrice * (appliedCommissionRate / 100)
@@ -160,11 +173,12 @@ export default function CostSimulationCard(props: {
     const profit = sellingPrice - cogs - commission - vat
     const marginRate = sellingPrice > 0 ? (profit / sellingPrice) * 100 : 0
     const assessment = assessMargin(marginRate)
+    const priceChanged = Boolean(selectedProfile) && Math.round(sellingPrice) !== Math.round(originalSellingPrice)
 
     return (
         <AppCard
             title="원가 시뮬레이션"
-            description="저장된 원가 프로필을 선택하고 입점처 또는 수수료율 기준으로 예상 마진을 계산합니다."
+            description="저장된 원가 프로필을 선택하고 입점처·수수료율·판매가 기준으로 예상 마진을 계산합니다."
         >
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <div className="space-y-4 lg:col-span-1">
@@ -210,8 +224,44 @@ export default function CostSimulationCard(props: {
                         />
                     </div>
 
+                    <div className="space-y-2">
+                        <Label>시뮬레이션 판매가</Label>
+                        <AppInput
+                            inputMode="numeric"
+                            value={simulationSellingPrice}
+                            onChange={(e) => onSimulationSellingPriceChange(e.target.value)}
+                            placeholder="예: 42000"
+                            disabled={!selectedProfile}
+                        />
+                        <div className="text-xs text-muted-foreground">
+                            기존 기준 판매가: {selectedProfile ? formatCurrency(originalSellingPrice) : "-"}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                        <AppButton
+                            type="button"
+                            variant="secondary"
+                            className="w-full sm:flex-1"
+                            onClick={onResetSimulation}
+                        >
+                            <RefreshCw className="h-4 w-4" />
+                            초기화
+                        </AppButton>
+
+                        <AppButton
+                            type="button"
+                            className="w-full sm:flex-1"
+                            onClick={onApplySimulationSellingPrice}
+                            disabled={!selectedProfile || sellingPrice <= 0 || !priceChanged || applyingSimulationPrice}
+                        >
+                            <Save className="h-4 w-4" />
+                            {applyingSimulationPrice ? "적용 중..." : "판매가 적용"}
+                        </AppButton>
+                    </div>
+
                     <div className="rounded-lg border p-3 text-xs text-muted-foreground">
-                        직접 수수료율을 입력하면 입점처 수수료율보다 우선 적용됩니다.
+                        직접 수수료율을 입력하면 입점처 수수료율보다 우선 적용됩니다. 판매가 적용은 선택한 원가 프로필의 기준 판매가만 변경합니다.
                     </div>
                 </div>
 
@@ -223,6 +273,7 @@ export default function CostSimulationCard(props: {
                             </div>
                             <div className="text-xs text-muted-foreground">
                                 입점처: {selectedStore?.name ?? "선택 안함"}
+                                {priceChanged ? " · 판매가 변경 미적용" : ""}
                             </div>
                         </div>
 
@@ -233,7 +284,7 @@ export default function CostSimulationCard(props: {
 
                     <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                         <div className="rounded-lg border p-3">
-                            <div className="text-xs text-muted-foreground">기준 판매가</div>
+                            <div className="text-xs text-muted-foreground">시뮬레이션 판매가</div>
                             <div className="mt-1 font-medium">{formatCurrency(sellingPrice)}</div>
                         </div>
 
