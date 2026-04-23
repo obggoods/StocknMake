@@ -178,17 +178,17 @@ export default function App() {
     return <AppLoadingScreen message="초대 여부를 확인하고 있어요" />
   }
 
-  if (!isAdmin && profile.is_invited !== true) {
+  if (!isAdmin && profile?.is_invited !== true) {
     return (
       <Suspense fallback={<AppLoadingScreen message="초대코드 화면을 불러오고 있어요" />}>
         <Routes>
-          {/* ✅ 로그인은 항상 허용 */}
+          {/* 로그인은 허용 */}
           <Route path="/login" element={<LoginPage />} />
 
-          {/* ✅ 초대코드 입력 화면 */}
+          {/* 초대코드 입력 */}
           <Route path="/invite" element={<InviteGatePage />} />
 
-          {/* ❌ 나머지는 전부 차단 */}
+          {/* 나머지는 전부 차단 */}
           <Route path="*" element={<Navigate to="/invite" replace />} />
         </Routes>
       </Suspense>
