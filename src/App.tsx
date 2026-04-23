@@ -7,7 +7,6 @@ import "./App.css"
 import AppLoadingScreen from "@/components/shared/AppLoadingScreen"
 import { Toaster } from "sonner"
 
-<Toaster />
 import AppLayout from "./app/layout/AppLayout"
 
 const DashboardPage = lazy(() => import("./features/dashboard/pages/DashboardPage"))
@@ -162,12 +161,15 @@ export default function App() {
 
   if (!session) {
     return (
-      <Suspense fallback={<AppLoadingScreen message="로그인 화면을 불러오고 있어요" />}>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Suspense>
+      <>
+        <Toaster />
+        <Suspense fallback={<AppLoadingScreen message="로그인 화면을 불러오고 있어요" />}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </Suspense>
+      </>
     )
   }
 
@@ -176,59 +178,77 @@ export default function App() {
     return <AppLoadingScreen message="초대 여부를 확인하고 있어요" />
   }
 
-  // 그냥 통과
+  if (!isAdmin && profile.is_invited !== true) {
+    return (
+      <Suspense fallback={<AppLoadingScreen message="초대코드 화면을 불러오고 있어요" />}>
+        <Routes>
+          {/* ✅ 로그인은 항상 허용 */}
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* ✅ 초대코드 입력 화면 */}
+          <Route path="/invite" element={<InviteGatePage />} />
+
+          {/* ❌ 나머지는 전부 차단 */}
+          <Route path="*" element={<Navigate to="/invite" replace />} />
+        </Routes>
+      </Suspense>
+    )
+  }
+
   // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
-
   return (
-    <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
-      <Routes>
-        <Route
-          element={
-            <AppLayout
-              sessionEmail={session.user.email ?? ""}
-              isAdmin={isAdmin}
-              billingPlan={billingPlan}
-              onLogout={async () => {
-                await supabase.auth.signOut()
-                nav("/login")
-              }}
-            />
-          }
-        >
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/inventory" element={<InventoryPage />} />
-          <Route path="/products" element={<ProductsPage />} />
-          <Route path="/stores" element={<StoresPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/margin" element={<MarginCalculatorPage />} />
-          <Route path="/settlements" element={<SettlementsPage />} />
-          <Route path="/pricing" element={<Pricing />} />
+    <>
+      <Toaster />
+      <Suspense fallback={<AppLoadingScreen message="화면을 불러오고 있어요" />}>
+        <Routes>
           <Route
-            path="/invite"
             element={
-              !isAdmin && profile.is_invited !== true ? (
-                <InviteGatePage />
-              ) : (
-                <Navigate to="/dashboard" replace />
-              )
+              <AppLayout
+                sessionEmail={session.user.email ?? ""}
+                isAdmin={isAdmin}
+                billingPlan={billingPlan}
+                onLogout={async () => {
+                  await supabase.auth.signOut()
+                  nav("/login")
+                }}
+              />
             }
-          />
-          {/* Admin */}
-          <Route
-            path="/admin/invites"
-            element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
-          />
+          >
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/inventory" element={<InventoryPage />} />
+            <Route path="/products" element={<ProductsPage />} />
+            <Route path="/stores" element={<StoresPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/margin" element={<MarginCalculatorPage />} />
+            <Route path="/settlements" element={<SettlementsPage />} />
+            <Route path="/pricing" element={<Pricing />} />
+            <Route
+              path="/invite"
+              element={
+                !isAdmin && profile.is_invited !== true ? (
+                  <InviteGatePage />
+                ) : (
+                  <Navigate to="/dashboard" replace />
+                )
+              }
+            />
+            {/* Admin */}
+            <Route
+              path="/admin/invites"
+              element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
+            />
 
-          {/* (임시) /admin/users로 들어오면 invites로 보내기 */}
-          <Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
+            {/* (임시) /admin/users로 들어오면 invites로 보내기 */}
+            <Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
 
-          {/* Backward compat */}
-          <Route path="/master" element={<Navigate to="/products" replace />} />
+            {/* Backward compat */}
+            <Route path="/master" element={<Navigate to="/products" replace />} />
 
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Route>
-      </Routes>
-    </Suspense>
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </>
   )
 }
