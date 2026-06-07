@@ -361,18 +361,18 @@ export default function StoresManager() {
         ) : filteredStores.length === 0 ? (
           <EmptyState title="결과가 없습니다" description="검색/필터 조건을 바꿔보세요." />
         ) : (
-          <div className="overflow-x-auto rounded-xl border">
+          <div className="overflow-hidden rounded-xl border">
             <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="min-w-[240px]">입점처</TableHead>
-                  <TableHead className="w-[110px]">상태</TableHead>
-                  <TableHead className="w-[120px]">온/오프라인</TableHead>
-                  <TableHead className="w-[110px] text-right">수수료</TableHead>
-                  <TableHead className="min-w-[240px]">태그</TableHead>
-                  <TableHead className="w-[160px] text-right">상세</TableHead>
-                </TableRow>
-              </TableHeader>
+            <TableHeader>
+  <TableRow>
+    <TableHead>입점처</TableHead>
+    <TableHead className="w-[80px]">상태</TableHead>
+    <TableHead className="hidden sm:table-cell w-[110px]">온/오프라인</TableHead>
+    <TableHead className="w-[70px] text-right">수수료</TableHead>
+    <TableHead className="hidden md:table-cell">태그</TableHead>
+    <TableHead className="w-[56px] text-right">삭제</TableHead>
+  </TableRow>
+</TableHeader>
 
               <TableBody>
                 {filteredStores.map((s) => {
@@ -383,7 +383,14 @@ export default function StoresManager() {
                   const more = tags.length - showTags.length
 
                   return (
-                    <TableRow key={s.id}>
+                    <TableRow
+  key={s.id}
+  className="cursor-pointer transition-colors hover:bg-muted/40"
+  onClick={() => {
+    setDetailStoreId(s.id)
+    setDetailOpen(true)
+  }}
+>
                       <TableCell>
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="text-sm font-medium truncate">{s.name}</div>
@@ -392,61 +399,52 @@ export default function StoresManager() {
                           </AppBadge>
                         </div>
                         {s.address ? (
-                          <div className="mt-1 text-xs text-muted-foreground truncate">{s.address}</div>
-                        ) : null}
+  <div className="mt-1 hidden sm:block text-xs text-muted-foreground truncate">
+    {s.address}
+  </div>
+) : null}
                       </TableCell>
 
                       <TableCell>
                         <AppBadge variant="muted">{statusLabel((s as any).status)}</AppBadge>
                       </TableCell>
 
-                      <TableCell>
-                        <AppBadge variant="muted">{channelLabel((s as any).channel)}</AppBadge>
-                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+  <AppBadge variant="muted">{channelLabel((s as any).channel)}</AppBadge>
+</TableCell>
 
                       <TableCell className="text-right tabular-nums">
                         {s.commissionRate == null ? "-" : `${s.commissionRate}%`}
                       </TableCell>
 
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          {showTags.map((t) => (
-                            <AppBadge key={t} variant="secondary">
-                              {t}
-                            </AppBadge>
-                          ))}
-                          {more > 0 && <AppBadge variant="muted">+{more}</AppBadge>}
-                          {tags.length === 0 && <span className="text-xs text-muted-foreground">-</span>}
-                        </div>
-                      </TableCell>
+                      <TableCell className="hidden md:table-cell">
+  <div className="flex flex-wrap gap-2">
+    {showTags.map((t) => (
+      <AppBadge key={t} variant="secondary">
+        {t}
+      </AppBadge>
+    ))}
+    {more > 0 && <AppBadge variant="muted">+{more}</AppBadge>}
+    {tags.length === 0 && <span className="text-xs text-muted-foreground">-</span>}
+  </div>
+</TableCell>
 
                       <TableCell className="text-right">
-                        <div className="inline-flex items-center justify-end gap-2">
-                          <AppButton
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setDetailStoreId(s.id)
-                              setDetailOpen(true)
-                            }}
-                          >
-                            상세
-                          </AppButton>
-
-                          <AppButton
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setDeleteStoreId(s.id)
-                              setDeleteStoreName(s.name)
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </AppButton>
-                        </div>
-                      </TableCell>
+  <AppButton
+    type="button"
+    size="sm"
+    variant="outline"
+    onClick={(e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setDeleteStoreId(s.id)
+      setDeleteStoreName(s.name)
+    }}
+    aria-label={`${s.name} 삭제`}
+  >
+    <Trash2 className="h-4 w-4" />
+  </AppButton>
+</TableCell>
                     </TableRow>
                   )
                 })}

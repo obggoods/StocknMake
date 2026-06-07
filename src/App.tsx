@@ -1,7 +1,7 @@
 // src/App.tsx
-import { Suspense, lazy, useEffect, useState } from "react"
+import { Suspense, lazy, useEffect, useRef, useState } from "react"
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
-import type { Session } from "@supabase/supabase-js"
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js"
 import Pricing from "@/pages_legacy/Pricing"
 import "./App.css"
 import AppLoadingScreen from "@/components/shared/AppLoadingScreen"
@@ -29,6 +29,8 @@ type MyProfile = {
 export default function App() {
   const nav = useNavigate()
 
+  const currentUserIdRef = useRef<string | null>(null)
+
   const [session, setSession] = useState<Session | null>(null)
   const [bootLoading, setBootLoading] = useState(true)
 
@@ -41,39 +43,72 @@ export default function App() {
   const [billingLoaded, setBillingLoaded] = useState(false)
   const [billingPlan, setBillingPlan] = useState<"free" | "basic" | "premium">("free")
   const [isPaidUser, setIsPaidUser] = useState(false)
+  const userId = session?.user.id ?? null
 
   // ✅ 0) 세션 부트스트랩 + Auth 상태 변화 구독
-  useEffect(() => {
-    let alive = true
+useEffect(() => {
+  let alive = true
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!alive) return
-      setSession(data.session)
-      setBootLoading(false)
-    })
+  const resetAppGateState = () => {
+    setProfile(null)
+    setIsAdmin(false)
+    setAdminChecked(false)
+    setBillingLoaded(false)
+    setBillingPlan("free")
+    setIsPaidUser(false)
+  }
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+  supabase.auth.getSession().then(({ data }) => {
+    if (!alive) return
+
+    const initialSession = data.session
+    currentUserIdRef.current = initialSession?.user.id ?? null
+
+    setSession(initialSession)
+    setBootLoading(false)
+  })
+
+  const { data: sub } = supabase.auth.onAuthStateChange(
+    (event: AuthChangeEvent, newSession) => {
+      const nextUserId = newSession?.user.id ?? null
+      const prevUserId = currentUserIdRef.current
+
+      // ✅ 로그아웃 또는 세션 없음: 앱 접근 상태 초기화
+      if (event === "SIGNED_OUT" || !nextUserId) {
+        currentUserIdRef.current = null
+        setSession(null)
+        resetAppGateState()
+        return
+      }
+
+      // ✅ 같은 사용자 세션 갱신/TOKEN_REFRESHED/INITIAL_SESSION은 화면을 갈아엎지 않음
+      // 탭 전환 후 돌아왔을 때 입력 중인 모달/폼이 날아가는 문제 방지
+      if (prevUserId === nextUserId) {
+        if (event === "USER_UPDATED") {
+          setSession(newSession)
+        }
+        return
+      }
+
+      // ✅ 실제 로그인 계정이 바뀐 경우에만 앱 접근 상태 재확인
+      currentUserIdRef.current = nextUserId
       setSession(newSession)
-      setProfile(null)
-      setIsAdmin(false)
-      setAdminChecked(false)
-      setBillingLoaded(false)
-      setBillingPlan("free")
-      setIsPaidUser(false)
-    })
-
-    return () => {
-      alive = false
-      sub.subscription.unsubscribe()
+      resetAppGateState()
     }
-  }, [])
+  )
+
+  return () => {
+    alive = false
+    sub.subscription.unsubscribe()
+  }
+}, [])
 
   // ✅ 1) 로그인 상태에서만 프로필 로드 (초대 여부)
   useEffect(() => {
     let alive = true
 
       ; (async () => {
-        if (!session) return
+        if (!userId) return
 
         try {
           setProfileLoading(true)
@@ -92,14 +127,14 @@ export default function App() {
     return () => {
       alive = false
     }
-  }, [session])
+  }, [userId])
 
   // ✅ 1.5) 로그인 상태에서만 billing 로드
   useEffect(() => {
     let alive = true
 
       ; (async () => {
-        if (!session) {
+        if (!userId) {
           if (!alive) return
           setBillingPlan("free")
           setIsPaidUser(false)
@@ -128,14 +163,14 @@ export default function App() {
     return () => {
       alive = false
     }
-  }, [session])
+  }, [userId])
 
   // ✅ 2) 로그인 상태에서만 관리자 여부 체크
   useEffect(() => {
     let cancelled = false
 
       ; (async () => {
-        if (!session) {
+        if (!userId) {
           if (!cancelled) {
             setIsAdmin(false)
             setAdminChecked(true)
@@ -153,7 +188,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [session])
+  }, [userId])
 
   if (bootLoading) {
     return <AppLoadingScreen message="서비스를 준비하고 있어요" />

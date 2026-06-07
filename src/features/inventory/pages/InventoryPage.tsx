@@ -241,6 +241,12 @@ export default function InventoryPage() {
 
   const stores = (data.stores ?? []) as any[]
   const products = (data.products ?? []) as any[]
+  const activeStores = useMemo(() => {
+    return stores.filter((s: any) => {
+      const status = String(s?.status ?? "active")
+      return status !== "inactive"
+    })
+  }, [stores])
   const inventory = (data.inventory ?? []) as any[] // { storeId, productId, onHandQty }
   const storeProductStates = (data.storeProductStates ?? []) as any[] // { storeId, productId, enabled }
 
@@ -286,17 +292,32 @@ export default function InventoryPage() {
 
   const storeOptions = useMemo(() => {
     const base = [{ label: "전체", value: "__all__" }]
-    const mapped = stores
-      .map((s: any) => ({ label: String(s?.name ?? "입점처"), value: String(s?.id ?? "") }))
-      .filter((x) => x.value)
-    return [...base, ...mapped]
-  }, [stores])
+    const mapped = activeStores
+  .map((s: any) => ({ label: String(s?.name ?? "입점처"), value: String(s?.id ?? "") }))
+  .filter((x) => x.value)
+return [...base, ...mapped]
+}, [activeStores])
 
-  const storeById = useMemo(() => new Map<string, any>(stores.map((s: any) => [String(s.id), s])), [stores])
+const storeById = useMemo(
+  () => new Map<string, any>(activeStores.map((s: any) => [String(s.id), s])),
+  [activeStores]
+)
   const selectedStoreName = useMemo(() => {
     if (selectedStoreId === "__all__") return ""
     return String(storeById.get(String(selectedStoreId))?.name ?? "").trim()
   }, [selectedStoreId, storeById])
+
+  useEffect(() => {
+    if (selectedStoreId === "__all__") return
+  
+    const existsInActiveStores = activeStores.some(
+      (s: any) => String(s.id) === String(selectedStoreId)
+    )
+  
+    if (!existsInActiveStores) {
+      setSelectedStoreId("__all__")
+    }
+  }, [selectedStoreId, activeStores])
 
   // ===== 목표 재고 =====
   const targetQty = useMemo(() => {
@@ -347,7 +368,7 @@ export default function InventoryPage() {
     const allProductIds = products.map((p: any) => String(p.id))
     const map = new Map<string, Set<string>>()
 
-    for (const s of stores) {
+    for (const s of activeStores) {
       map.set(String(s.id), new Set(allProductIds))
     }
 
@@ -372,7 +393,7 @@ export default function InventoryPage() {
     }
 
     return map
-  }, [storeProductStates, stores, products])
+  }, [storeProductStates, activeStores, products])
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>()
@@ -422,7 +443,9 @@ export default function InventoryPage() {
     }
 
     const targetStores =
-      selectedStoreId === "__all__" ? stores.map((s) => String(s.id)) : [String(selectedStoreId)]
+  selectedStoreId === "__all__"
+    ? activeStores.map((s: any) => String(s.id))
+    : [String(selectedStoreId)]
 
     const out: any[] = []
     for (const sid of targetStores) {
@@ -437,7 +460,7 @@ export default function InventoryPage() {
     }
 
     return out
-  }, [inventory, stores, products, selectedStoreId, productIdsEnabledByStore])
+  }, [inventory, activeStores, products, selectedStoreId, productIdsEnabledByStore])
 
   // ===== 필터 적용 (카테고리 / 저재고) =====
   const filteredInventory = useMemo(() => {
@@ -542,7 +565,7 @@ export default function InventoryPage() {
       }
     >()
 
-    for (const s of stores) {
+    for (const s of activeStores) {
       const sid = String(s.id)
       const enabledSet = productIdsEnabledByStore.get(sid) ?? new Set<string>()
 
@@ -594,7 +617,7 @@ export default function InventoryPage() {
       if (a.category !== b.category) return a.category.localeCompare(b.category)
       return a.name.localeCompare(b.name)
     })
-  }, [stores, productIdsEnabledByStore, inventory, storeById, targetQty, productById, categoryFilter])
+  }, [activeStores, productIdsEnabledByStore, inventory, storeById, targetQty, productById, categoryFilter])
 
   const makeNeededTotalAllStores = useMemo(() => {
     return makeRowsTotal.reduce((acc, row) => acc + row.need, 0)
@@ -689,9 +712,9 @@ export default function InventoryPage() {
 
     // 2) 입점처별 시트
     const targetStoreIds =
-      selectedStoreId === "__all__"
-        ? stores.map((s: any) => String(s.id))
-        : [String(selectedStoreId)]
+  selectedStoreId === "__all__"
+    ? activeStores.map((s: any) => String(s.id))
+    : [String(selectedStoreId)]
 
     for (const sid of targetStoreIds) {
       const storeName = String(storeById.get(sid)?.name ?? "입점처")
@@ -729,7 +752,7 @@ export default function InventoryPage() {
   }, [
     sortedInventoryRows,
     selectedStoreId,
-    stores,
+    activeStores,
     storeById,
     productNameById,
     productCategoryById,

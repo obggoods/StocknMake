@@ -233,11 +233,11 @@ export function StoreDetailDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="max-w-[820px]">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-24px)] max-w-[820px] flex-col overflow-hidden p-0 sm:p-6">
+      <DialogHeader className="shrink-0 px-4 pt-4 text-left sm:px-0 sm:pt-0">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <DialogTitle className="truncate">{title}</DialogTitle>
+            <DialogTitle className="truncate pr-8 text-left">{title}</DialogTitle>
 
               {!isCreate && store && !isEditing && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -257,28 +257,29 @@ export function StoreDetailDialog(props: {
               )}
             </div>
           </div>
-        </DialogHeader>
+          </DialogHeader>
 
-        {/* create는 항상 편집 UI */}
-        {!store && !isCreate ? (
+<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-0">
+  {/* create는 항상 편집 UI */}
+  {!store && !isCreate ? (
           <div className="py-6 text-sm text-muted-foreground">선택된 입점처가 없습니다.</div>
         ) : !isEditing ? (
           // ✅ 보기 모드(카드)
           <div className="space-y-4">
             <div className="rounded-xl border p-4 space-y-2">
               <div className="text-sm font-semibold">기본 정보</div>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-2">
                 <div className="text-sm text-muted-foreground">입점처명</div>
                 <div className="text-sm">{store?.name ?? "-"}</div>
 
                 <div className="text-sm text-muted-foreground">주소</div>
-                <div className="text-sm">{store?.address ?? "-"}</div>
+                <div className="text-sm break-words">{store?.address ?? "-"}</div>
               </div>
             </div>
 
             <div className="rounded-xl border p-4 space-y-2">
               <div className="text-sm font-semibold">계약/운영</div>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-2">
                 <div className="text-sm text-muted-foreground">상태</div>
                 <div className="text-sm">{statusLabel(store?.status ?? "active")}</div>
 
@@ -294,15 +295,15 @@ export function StoreDetailDialog(props: {
                 <div className="text-sm">{store?.storeFee == null ? "-" : `${store.storeFee}`}</div>
 
                 <div className="text-sm text-muted-foreground">태그</div>
-                <div className="text-sm">
-                  {(store?.tags ?? []).length ? (store?.tags ?? []).join(", ") : "-"}
-                </div>
+                <div className="text-sm break-words">
+  {(store?.tags ?? []).length ? (store?.tags ?? []).join(", ") : "-"}
+</div>
               </div>
             </div>
 
             <div className="rounded-xl border p-4 space-y-2">
               <div className="text-sm font-semibold">정산 운영</div>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-2">
                 <div className="text-sm text-muted-foreground">정산 주기</div>
                 <div className="text-sm">{store?.settlementCycle ?? "-"}</div>
 
@@ -318,7 +319,7 @@ export function StoreDetailDialog(props: {
 
             <div className="rounded-xl border p-4 space-y-2">
               <div className="text-sm font-semibold">담당자/메모</div>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-2">
                 <div className="text-sm text-muted-foreground">담당자/대표명</div>
                 <div className="text-sm">{store?.contactName ?? "-"}</div>
 
@@ -326,7 +327,7 @@ export function StoreDetailDialog(props: {
                 <div className="text-sm">{store?.phone ?? "-"}</div>
 
                 <div className="text-sm text-muted-foreground">메모</div>
-                <div className="text-sm">{store?.memo ?? "-"}</div>
+                <div className="text-sm break-words">{store?.memo ?? "-"}</div>
               </div>
             </div>
           </div>
@@ -455,41 +456,41 @@ export function StoreDetailDialog(props: {
             </div>
           </div>
         )}
+</div>
+<DialogFooter className="shrink-0 border-t px-4 py-3 sm:mt-2 sm:border-t-0 sm:px-0 sm:py-0">
+  {!isEditing ? (
+    <div className="grid w-full grid-cols-2 gap-2">
+      <AppButton
+        variant="outline"
+        onClick={() => setIsEditing(true)}
+        disabled={props.busy || !store}
+      >
+        수정
+      </AppButton>
 
-        <DialogFooter className="mt-2">
-          {/* edit에서만 삭제 */}
-          {!isCreate && store && props.onRequestDelete && (
-            <AppButton
-              variant="outline"
-              onClick={() => props.onRequestDelete?.(store.id, store.name)}
-              disabled={props.busy}
-              className="mr-auto"
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              삭제
-            </AppButton>
-          )}
+      {!isCreate && store && props.onRequestDelete && (
+        <AppButton
+          variant="outline"
+          onClick={() => props.onRequestDelete?.(store.id, store.name)}
+          disabled={props.busy}
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          삭제
+        </AppButton>
+      )}
+    </div>
+  ) : (
+    <div className="grid w-full grid-cols-2 gap-2">
+      <AppButton variant="secondary" onClick={onClickCancelEdit} disabled={props.busy}>
+        취소
+      </AppButton>
 
-          {!isEditing ? (
-            <>
-              <AppButton variant="outline" onClick={() => setIsEditing(true)} disabled={props.busy || !store}>
-                수정
-              </AppButton>
-              <AppButton variant="secondary" onClick={close}>
-                닫기
-              </AppButton>
-            </>
-          ) : (
-            <>
-              <AppButton variant="secondary" onClick={onClickCancelEdit} disabled={props.busy}>
-                {isCreate ? "취소" : "취소"}
-              </AppButton>
-              <AppButton onClick={onClickPrimary} disabled={props.busy || !name.trim()}>
-                {isCreate ? "추가" : "저장"}
-              </AppButton>
-            </>
-          )}
-        </DialogFooter>
+      <AppButton onClick={onClickPrimary} disabled={props.busy || !name.trim()}>
+        {isCreate ? "추가" : "저장"}
+      </AppButton>
+    </div>
+  )}
+</DialogFooter>
       </DialogContent>
     </Dialog>
   )
