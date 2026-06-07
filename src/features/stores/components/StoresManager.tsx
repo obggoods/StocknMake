@@ -299,12 +299,12 @@ export default function StoresManager() {
       {/* ✅ 입점처 목록 + 필터 */}
       <AppCard density="compact" title="입점처 목록" className="min-w-0" contentClassName="space-y-3">
         {/* 필터 바 */}
-        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.2fr)_minmax(140px,0.7fr)_minmax(140px,0.7fr)_minmax(200px,1fr)_auto] lg:items-center">
           <AppInput
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="검색: 입점처명/주소"
-            className="md:max-w-[260px]"
+            className="w-full"
           />
           <AppSelect
             value={statusFilter}
@@ -315,7 +315,7 @@ export default function StoresManager() {
               { value: "active", label: "상태: 입점중" },
               { value: "inactive", label: "상태: 퇴점" },
             ]}
-            className="md:max-w-[200px]"
+            className="w-full"
           />
           <AppSelect
             value={channelFilter}
@@ -326,16 +326,16 @@ export default function StoresManager() {
               { value: "offline", label: "채널: 오프라인" },
               { value: "online", label: "채널: 온라인" },
             ]}
-            className="md:max-w-[220px]"
+            className="w-full"
           />
           <AppInput
             value={tagFilter}
             onChange={(e) => setTagFilter(e.target.value)}
             placeholder="태그 필터 (부분 검색)"
-            className="md:max-w-[240px]"
+            className="w-full"
           />
 
-          <div className="md:ml-auto flex items-center gap-2">
+<div className="flex items-center gap-2 sm:col-span-2 lg:col-span-1 lg:justify-end">
             <AppBadge variant="muted">표시 {filteredStores.length}개</AppBadge>
             <AppButton
               type="button"

@@ -16,6 +16,7 @@ import { AppButton } from "@/components/app/AppButton"
 import { AppCard } from "@/components/app/AppCard"
 import { AppBadge } from "@/components/app/AppBadge"
 import { AppInput } from "@/components/app/AppInput"
+import { AppSelect } from "@/components/app/AppSelect"
 
 import {
   Table,
@@ -317,18 +318,17 @@ function SelectField(props: {
         {props.label}
         {props.required ? <span className="text-destructive"> *</span> : null}
       </span>
-      <select
-        className="h-9 rounded-md border bg-background px-2 text-sm"
+
+      <AppSelect
         value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-      >
-        <option value="">선택</option>
-        {props.options.map((h) => (
-          <option key={h} value={h}>
-            {h}
-          </option>
-        ))}
-      </select>
+        onValueChange={props.onChange}
+        placeholder="선택"
+        className="h-9"
+        options={props.options.map((h) => ({
+          value: h,
+          label: h,
+        }))}
+      />
     </label>
   )
 }
@@ -947,28 +947,35 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
         title="새 정산 추가"
         description="엑셀 업로드 → 입점처/월 선택 → 컬럼 매핑(바코드/수량/금액) → 미리보기 → v2 정산 저장"
         action={
-          <div className="flex flex-wrap items-center gap-2">
-            <AppButton type="button" variant="outline" onClick={templateDownload}>
-              엑셀 템플릿 다운로드
-            </AppButton>
+          <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3">
+<AppButton
+  type="button"
+  variant="outline"
+  onClick={templateDownload}
+  className="w-full"
+>
+  엑셀 템플릿 다운로드
+</AppButton>
 
-            <AppButton
-              type="button"
-              variant="outline"
-              onClick={() => inputRef.current?.click()}
-              disabled={a.loading || busy}
-            >
-              엑셀 업로드
-            </AppButton>
+<AppButton
+  type="button"
+  variant="outline"
+  onClick={() => inputRef.current?.click()}
+  disabled={a.loading || busy}
+  className="w-full"
+>
+  엑셀 업로드
+</AppButton>
 
-            <AppButton
-              type="button"
-              variant="outline"
-              onClick={() => setSummaryOpen((v) => !v)}
-              disabled={a.loading || busy}
-            >
-              판매총액만 입력
-            </AppButton>
+<AppButton
+  type="button"
+  variant="outline"
+  onClick={() => setSummaryOpen((v) => !v)}
+  disabled={a.loading || busy}
+  className="w-full"
+>
+  판매총액만 입력
+</AppButton>
 
             <input
               ref={inputRef}
@@ -995,43 +1002,40 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   <span className="text-xs text-muted-foreground">
                     입점처 <span className="text-destructive"> *</span>
                   </span>
-                  <select
-                    className="h-9 rounded-md border bg-background px-2 text-sm"
-                    value={summaryStoreId}
-                    onChange={(e) => setSummaryStoreId(e.target.value)}
-                  >
-                    <option value="">선택</option>
-                    {a.data.stores.map((s: any) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                  <AppSelect
+  value={summaryStoreId}
+  onValueChange={setSummaryStoreId}
+  placeholder="입점처 선택"
+  className="h-9"
+  options={a.data.stores.map((s: any) => ({
+    value: String(s.id),
+    label: String(s.name),
+  }))}
+/>
                 </label>
 
                 <label className="grid gap-1">
                   <span className="text-xs text-muted-foreground">
                     월(YYYY.MM) <span className="text-destructive"> *</span>
                   </span>
-                  <select
-                    className="h-9 rounded-md border bg-background px-2 text-sm"
-                    value={summaryMonth}
-                    onChange={(e) => setSummaryMonth(e.target.value)}
-                  >
-                    {Array.from({ length: 24 }).map((_, i) => {
-                      const d = new Date()
-                      d.setMonth(d.getMonth() - i)
-                      const y = d.getFullYear()
-                      const m = String(d.getMonth() + 1).padStart(2, "0")
-                      const value = `${y}-${m}`
-                      const label = `${y}.${m}`
-                      return (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      )
-                    })}
-                  </select>
+                  <AppSelect
+  value={summaryMonth}
+  onValueChange={setSummaryMonth}
+  placeholder="월 선택"
+  className="h-9"
+  options={Array.from({ length: 24 }).map((_, i) => {
+    const d = new Date()
+    d.setMonth(d.getMonth() - i)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    const value = `${y}-${m}`
+
+    return {
+      value,
+      label: `${y}.${m}`,
+    }
+  })}
+/>
                 </label>
 
                 <label className="grid gap-1">
@@ -1124,7 +1128,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
 
         {sheetHeaders.length > 0 && !rows ? (
           <div className="mt-4 space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid w-full max-w-[660px] grid-cols-2 gap-2 md:grid-cols-3 xl:w-auto">
               <AppBadge variant="secondary">헤더 {sheetHeaders.length}개</AppBadge>
               {lastFileName ? <span className="text-xs text-muted-foreground">{lastFileName}</span> : null}
             </div>
@@ -1187,43 +1191,40 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                   <span className="text-xs text-muted-foreground">
                     입점처 <span className="text-destructive"> *</span>
                   </span>
-                  <select
-                    className="h-9 rounded-md border bg-background px-2 text-sm"
-                    value={selectedStoreId}
-                    onChange={(e) => setSelectedStoreId(e.target.value)}
-                  >
-                    <option value="">선택</option>
-                    {a.data.stores.map((s: any) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                  <AppSelect
+  value={selectedStoreId}
+  onValueChange={setSelectedStoreId}
+  placeholder="입점처 선택"
+  className="h-9"
+  options={a.data.stores.map((s: any) => ({
+    value: String(s.id),
+    label: String(s.name),
+  }))}
+/>
                 </label>
 
                 <label className="grid gap-1">
                   <span className="text-xs text-muted-foreground">
                     월(YYYY.MM) <span className="text-destructive"> *</span>
                   </span>
-                  <select
-                    className="h-9 rounded-md border bg-background px-2 text-sm"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                  >
-                    {Array.from({ length: 24 }).map((_, i) => {
-                      const d = new Date()
-                      d.setMonth(d.getMonth() - i)
-                      const y = d.getFullYear()
-                      const m = String(d.getMonth() + 1).padStart(2, "0")
-                      const value = `${y}-${m}`
-                      const label = `${y}.${m}`
-                      return (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      )
-                    })}
-                  </select>
+                  <AppSelect
+  value={selectedMonth}
+  onValueChange={setSelectedMonth}
+  placeholder="월 선택"
+  className="h-9"
+  options={Array.from({ length: 24 }).map((_, i) => {
+    const d = new Date()
+    d.setMonth(d.getMonth() - i)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    const value = `${y}-${m}`
+
+    return {
+      value,
+      label: `${y}.${m}`,
+    }
+  })}
+/>
                 </label>
 
                 <SelectField
