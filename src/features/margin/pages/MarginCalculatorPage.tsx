@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react"
+import { useEffect, useMemo, useState, useRef, type WheelEvent } from "react"
 import PageHeader from "@/app/layout/PageHeader"
 import { AppSection } from "@/components/app/AppSection"
 import { AppCard } from "@/components/app/AppCard"
@@ -208,6 +208,28 @@ function calcMarginRate(p: Product) {
   return (calcProfit(p) / p.sellingPrice) * 100
 }
 
+function MarginSummaryCards({ draft }: { draft: Product }) {
+  const items = [
+    { label: "총원가", value: formatCurrency(calcCOGS(draft)) },
+    { label: "수수료", value: formatCurrency(calcCommission(draft)) },
+    { label: "예상 순이익", value: formatCurrency(calcProfit(draft)) },
+    { label: "마진율", value: formatPercent(calcMarginRate(draft)) },
+  ]
+
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {items.map((item) => (
+        <div key={item.label} className="min-w-0 rounded-lg border bg-card p-3 sm:p-4">
+          <div className="truncate text-xs text-muted-foreground">{item.label}</div>
+          <div className="mt-1 min-w-0 whitespace-nowrap text-[clamp(0.875rem,2.4vw,1.125rem)] font-semibold leading-tight tracking-tight">
+            {item.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function emptyProduct(): Product {
   return {
     id: uuid(),
@@ -326,6 +348,11 @@ export default function MarginCalculatorPage(props?: {
   const [newMaterialQty, setNewMaterialQty] = useState("1")
   const [libSearch, setLibSearch] = useState("")
   const [libUnitPriceEdit, setLibUnitPriceEdit] = useState<Record<string, string>>({})
+  const [activeMarginTab, setActiveMarginTab] = useState<"profiles" | "library">("profiles")
+
+  const stopScrollPropagation = (e: WheelEvent<HTMLElement>) => {
+    e.stopPropagation()
+  }
 
   // ✅ 제품 입력 탭에서 "라이브러리 검색 후 즉시 추가"용
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
@@ -803,7 +830,76 @@ export default function MarginCalculatorPage(props?: {
     setDraft((prev) => ({ ...prev, materials: prev.materials.filter((m) => m.id !== id) }))
   }
 
-  // ✅ 라이브러리: DB upsert + state 반영
+  const applyLibraryPriceToProfiles = async (item: LibraryItem) => {
+    const targetName = normName(item.name)
+    if (!targetName) return 0
+
+    const updatedProfiles = marginProducts
+      .map((profile) => {
+        let changed = false
+
+        const nextMaterials = profile.materials.map((material) => {
+          if (normName(material.name) !== targetName) return material
+          if (Number(material.unitPrice) === Number(item.unitPrice)) return material
+
+          changed = true
+          return { ...material, unitPrice: item.unitPrice }
+        })
+
+        if (!changed) return null
+
+        return migrateProduct({
+          ...profile,
+          materials: nextMaterials,
+          createdAt: profile.createdAt,
+        })
+      })
+      .filter(Boolean) as Product[]
+
+    if (updatedProfiles.length === 0) {
+      setDraft((prev) => ({
+        ...prev,
+        materials: prev.materials.map((material) =>
+          normName(material.name) === targetName
+            ? { ...material, unitPrice: item.unitPrice }
+            : material
+        ),
+      }))
+      return 0
+    }
+
+    await Promise.all(
+      updatedProfiles.map((profile) =>
+        updateMyMarginProductData({
+          id: profile.id,
+          name: profile.name,
+          memo: profile.memo ?? "",
+          data: profile,
+        })
+      )
+    )
+
+    const updatedMap = new Map(updatedProfiles.map((profile) => [profile.id, profile]))
+
+    setMarginProducts((prev) =>
+      prev.map((profile) => updatedMap.get(profile.id) ?? profile)
+    )
+
+    setDraft((prev) => ({
+      ...prev,
+      materials: prev.materials.map((material) =>
+        normName(material.name) === targetName
+          ? { ...material, unitPrice: item.unitPrice }
+          : material
+      ),
+    }))
+
+    setEditing((prev) => (prev ? updatedMap.get(prev.id) ?? prev : prev))
+
+    return updatedProfiles.length
+  }
+
+  // ✅ 라이브러리: DB upsert + state 반영 + 같은 이름 재료를 쓰는 원가 프로필 단가 동기화
   const upsertLibraryItem = async (name: string, unitPrice: number) => {
     const n = name.trim()
     if (!n) return
@@ -825,6 +921,9 @@ export default function MarginCalculatorPage(props?: {
     })
 
     setLibUnitPriceEdit((m) => ({ ...m, [saved.id]: String(saved.unitPrice) }))
+
+    const changedCount = await applyLibraryPriceToProfiles(saved)
+    return { saved, changedCount }
   }
 
   const deleteLibraryItem = async (id: string) => {
@@ -852,7 +951,177 @@ export default function MarginCalculatorPage(props?: {
   const saveLibraryUnitPrice = async (it: LibraryItem) => {
     const raw = libUnitPriceEdit[it.id] ?? String(it.unitPrice)
     const v = clamp(toNumber(raw), 0)
-    await upsertLibraryItem(it.name, v)
+    const result = await upsertLibraryItem(it.name, v)
+
+    if ((result?.changedCount ?? 0) > 0) {
+      toast.success(`라이브러리 단가를 저장하고 원가 프로필 ${result.changedCount}개에 반영했습니다.`)
+    } else {
+      toast.success("라이브러리 단가를 저장했습니다.")
+    }
+  }
+
+  const renderLibraryManager = (options?: { showAddToDraft?: boolean }) => {
+    const showAddToDraft = options?.showAddToDraft ?? false
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="space-y-2 md:col-span-2">
+            <Label>검색</Label>
+            <AppInput
+              value={libSearch}
+              onChange={(e) => setLibSearch(e.target.value)}
+              placeholder="예: 원단, 지퍼, 라벨..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>빠른 추가 (이름)</Label>
+            <AppInput
+              value={newMaterialName}
+              onChange={(e) => setNewMaterialName(e.target.value)}
+              placeholder="예: 지퍼"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="space-y-2">
+            <Label>빠른 추가 (단가)</Label>
+            <AppInput
+              inputMode="numeric"
+              value={newMaterialUnitPrice}
+              onChange={(e) => setNewMaterialUnitPrice(e.target.value)}
+              placeholder="예: 300"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>빠른 추가 (수량)</Label>
+            <AppInput
+              inputMode="decimal"
+              value={newMaterialQty}
+              onChange={(e) => setNewMaterialQty(e.target.value)}
+              placeholder="예: 1"
+            />
+          </div>
+          <div className="flex flex-col gap-2 md:col-span-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-end">
+            <AppButton
+              variant="secondary"
+              onClick={() => {
+                const name = newMaterialName.trim()
+                const price = clamp(toNumber(newMaterialUnitPrice), 0)
+                if (!name) return
+                void upsertLibraryItem(name, price)
+              }}
+              title="이름 기준으로 라이브러리에 저장/갱신"
+              className="w-full sm:w-auto"
+            >
+              <ArrowDownToLine className="mr-2 h-4 w-4" />
+              라이브러리 저장
+            </AppButton>
+
+            {showAddToDraft ? (
+              <AppButton
+                onClick={() => {
+                  const name = newMaterialName.trim()
+                  const price = clamp(toNumber(newMaterialUnitPrice), 0)
+                  if (!name) return
+                  setLastAddedLibraryId("quick-add")
+                  window.setTimeout(
+                    () =>
+                      setLastAddedLibraryId((cur) =>
+                        cur === "quick-add" ? null : cur
+                      ),
+                    700
+                  )
+
+                  addMaterialToDraft(name, price)
+                }}
+                title="현재 수량으로 제품 재료에 추가"
+                variant="default"
+                className="w-full sm:w-auto"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                제품에 추가
+              </AppButton>
+            ) : null}
+          </div>
+        </div>
+
+        <Separator />
+
+        {sortedLibrary.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            아직 라이브러리가 비어 있습니다. 이름과 단가를 입력한 뒤 “라이브러리 저장”을 누르세요.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>이름</TableHead>
+                  <TableHead className="w-44">단가</TableHead>
+                  {showAddToDraft ? <TableHead className="w-24 text-right">추가</TableHead> : null}
+                  <TableHead className="w-16" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedLibrary.map((it) => (
+                  <TableRow key={it.id}>
+                    <TableCell className="font-medium">{it.name}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <AppInput
+                          inputMode="numeric"
+                          className="w-full sm:w-40"
+                          value={libUnitPriceEdit[it.id] ?? String(it.unitPrice)}
+                          onChange={(e) =>
+                            setLibUnitPriceEdit((m) => ({
+                              ...m,
+                              [it.id]: e.target.value,
+                            }))
+                          }
+                        />
+                        <AppButton
+                          variant="secondary"
+                          size="sm"
+                          className="self-end sm:self-auto"
+                          onClick={() => void saveLibraryUnitPrice(it)}
+                        >
+                          저장
+                        </AppButton>
+                      </div>
+                    </TableCell>
+                    {showAddToDraft ? (
+                      <TableCell className="text-right">
+                        <AppButton
+                          variant={
+                            lastAddedLibraryId === it.id ? "default" : "secondary"
+                          }
+                          size="sm"
+                          onClick={() => addFromLibraryToDraft(it)}
+                          title="현재 수량으로 제품 재료에 추가"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </AppButton>
+                      </TableCell>
+                    ) : null}
+                    <TableCell className="text-right">
+                      <AppButton
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => void deleteLibraryItem(it.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </AppButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    )
   }
 
   const renderReadOnlyDetail = () => {
@@ -1057,9 +1326,19 @@ export default function MarginCalculatorPage(props?: {
           applyingSimulationPrice={applyingSimulationPrice}
         />
 
-        <div className="space-y-6">
-          <AppCard
-            title="원가 프로필 목록"
+        <Tabs
+          value={activeMarginTab}
+          onValueChange={(value) => setActiveMarginTab(value as "profiles" | "library")}
+          className="space-y-4"
+        >
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="profiles">원가 프로필</TabsTrigger>
+            <TabsTrigger value="library">원부자재 라이브러리</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="profiles" className="mt-0">
+            <AppCard
+              title="원가 프로필 목록"
             description={
               loading
                 ? "불러오는 중..."
@@ -1093,16 +1372,396 @@ export default function MarginCalculatorPage(props?: {
                   {isReadOnly ? (
                     renderReadOnlyDetail()
                   ) : (
-                    <Tabs defaultValue="product" className="w-full">
+                    <Tabs defaultValue="simple" className="w-full">
                       <TabsList className="grid w-full grid-cols-2">
-                        <TabsTrigger value="product">제품 입력</TabsTrigger>
-                        <TabsTrigger value="library">
-                          <Library className="mr-2 h-4 w-4" />
-                          원부자재 라이브러리
-                        </TabsTrigger>
+                        <TabsTrigger value="simple">간편 계산</TabsTrigger>
+                        <TabsTrigger value="detail">상세 계산</TabsTrigger>
                       </TabsList>
 
-                      <TabsContent value="product" className="space-y-6 pt-4">
+                      <TabsContent value="simple" className="space-y-6 pt-4">
+                        <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+                          간편 계산은 외주 제작 단가, 포장/부자재, 판매 수수료, VAT만 빠르게 입력하는 방식입니다.
+                          직접 제작 인건비와 시간당 생산량까지 계산하려면 상세 계산 탭을 사용하세요.
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label>카테고리 선택</Label>
+                            <select
+                              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                              value={selectedCategory}
+                              onChange={(e) => {
+                                setSelectedCategory(e.target.value)
+                                setSelectedProductId("")
+                              }}
+                            >
+                              <option value="">전체</option>
+                              {categories.map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>입점처 선택</Label>
+                            <select
+                              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                              value={selectedStoreId}
+                              onChange={(e) => handleStoreChange(e.target.value)}
+                            >
+                              <option value="">입점처 선택 안함</option>
+                              {stores.map((store) => (
+                                <option key={store.id} value={store.id}>
+                                  {store.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>제품 선택</Label>
+                            <select
+                              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                              value={selectedProductId}
+                              onChange={(e) => setSelectedProductId(e.target.value)}
+                            >
+                              <option value="">제품 선택 안함 (카테고리 공통 적용)</option>
+                              {filteredProducts.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>마진 프로필 이름</Label>
+                            <AppInput
+                              value={draft.name}
+                              onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))}
+                              placeholder="예: 엽서 제작 마진"
+                            />
+                          </div>
+
+                          <div className="space-y-2 md:col-span-2">
+                            <Label>메모(선택)</Label>
+                            <AppInput
+                              value={draft.memo ?? ""}
+                              onChange={(e) => setDraft((p) => ({ ...p, memo: e.target.value }))}
+                              placeholder="예: 업체 제작 단가 기준"
+                            />
+                          </div>
+                        </div>
+
+                        <Separator />
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                          <div className="space-y-2">
+                            <Label>제작 단가/외주비(개당)</Label>
+                            <AppInput
+                              inputMode="numeric"
+                              value={String(draft.outsourcingCost)}
+                              onChange={(e) =>
+                                setDraft((p) => ({
+                                  ...p,
+                                  outsourcingCost: clamp(toNumber(e.target.value), 0),
+                                }))
+                              }
+                              placeholder="예: 1200"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>판매가</Label>
+                            <AppInput
+                              inputMode="numeric"
+                              value={String(draft.sellingPrice)}
+                              onChange={(e) =>
+                                setDraft((p) => ({
+                                  ...p,
+                                  sellingPrice: clamp(toNumber(e.target.value), 0),
+                                }))
+                              }
+                              placeholder="예: 3500"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>판매수수료율(%)</Label>
+                            <AppInput
+                              inputMode="decimal"
+                              value={String(draft.salesCommissionRate)}
+                              onChange={(e) =>
+                                setDraft((p) => ({
+                                  ...p,
+                                  salesCommissionRate: clamp(toNumber(e.target.value), 0, 100),
+                                }))
+                              }
+                              placeholder="예: 10"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>VAT(%)</Label>
+                            <AppInput
+                              inputMode="decimal"
+                              value={String(draft.vatRate)}
+                              onChange={(e) =>
+                                setDraft((p) => ({
+                                  ...p,
+                                  vatRate: clamp(toNumber(e.target.value), 0, 100),
+                                }))
+                              }
+                              placeholder="예: 10"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>로스/불량률(%)</Label>
+                            <AppInput
+                              inputMode="decimal"
+                              value={String(draft.lossRate)}
+                              onChange={(e) =>
+                                setDraft((p) => ({
+                                  ...p,
+                                  lossRate: clamp(toNumber(e.target.value), 0, 100),
+                                }))
+                              }
+                              placeholder="예: 0"
+                            />
+                          </div>
+                        </div>
+
+                                                <div className="space-y-3">
+                          <div className="font-medium text-sm">포장/부자재</div>
+
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                            <div className="space-y-2 md:col-span-2">
+                              <Label>이름</Label>
+                              <AppInput
+                                className="h-8 w-full px-2 text-sm"
+                                value={newMaterialName}
+                                onChange={(e) => setNewMaterialName(e.target.value)}
+                                placeholder="예: 원단"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>단가</Label>
+                              <AppInput
+                                className="h-8 w-full px-2 text-sm"
+                                inputMode="numeric"
+                                value={newMaterialUnitPrice}
+                                onChange={(e) => setNewMaterialUnitPrice(e.target.value)}
+                                placeholder="예: 2500"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>수량</Label>
+                              <AppInput
+                                className="h-8 w-full px-2 text-sm"
+                                inputMode="decimal"
+                                value={newMaterialQty}
+                                onChange={(e) => setNewMaterialQty(e.target.value)}
+                                placeholder="예: 0.5"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end gap-2">
+                            <Popover open={libraryPickerOpen} onOpenChange={setLibraryPickerOpen}>
+                              <PopoverTrigger asChild>
+                                <AppButton variant="secondary" type="button">
+                                  <Library className="mr-2 h-4 w-4" />
+                                  라이브러리
+                                </AppButton>
+                              </PopoverTrigger>
+                              <PopoverContent align="end" className="w-[360px] p-0" onWheel={stopScrollPropagation}>
+                                <Command>
+                                  <CommandInput
+                                    value={libraryPickerQuery}
+                                    onValueChange={setLibraryPickerQuery}
+                                    placeholder="저장된 재료 검색..."
+                                  />
+                                  <CommandList className="max-h-[320px] overscroll-contain" onWheel={stopScrollPropagation}>
+                                    <CommandEmpty>검색 결과가 없습니다.</CommandEmpty>
+                                    <CommandGroup heading={`저장된 재료 (${library.length})`}>
+                                      {(libraryPickerQuery.trim()
+                                        ? library.filter((x) =>
+                                          x.name.toLowerCase().includes(libraryPickerQuery.trim().toLowerCase())
+                                        )
+                                        : library
+                                      )
+                                        .slice(0, 50)
+                                        .map((it: any) => (
+                                          <CommandItem
+                                            key={it.id}
+                                            value={`${it.name} ${it.unitPrice}`}
+                                            onSelect={() => {
+                                              addMaterialToDraft(String(it.name), it.unitPrice)
+                                              setLibraryPickerOpen(false)
+                                              setLibraryPickerQuery("")
+                                              setLastAddedLibraryId(it.id)
+                                              window.setTimeout(
+                                                () =>
+                                                  setLastAddedLibraryId((cur) =>
+                                                    cur === it.id ? null : cur
+                                                  ),
+                                                700
+                                              )
+                                            }}
+                                          >
+                                            <div className="flex w-full items-center justify-between gap-3">
+                                              <div className="min-w-0">
+                                                <div className="truncate font-medium">{it.name}</div>
+                                                <div className="truncate text-xs text-muted-foreground">
+                                                  {formatCurrency(it.unitPrice)}
+                                                </div>
+                                              </div>
+                                              <div className="text-xs text-muted-foreground">추가</div>
+                                            </div>
+                                          </CommandItem>
+                                        ))}
+                                    </CommandGroup>
+                                  </CommandList>
+                                </Command>
+                              </PopoverContent>
+                            </Popover>
+
+                            <AppButton variant="secondary" onClick={() => addMaterialToDraft()}>
+                              <Plus className="mr-2 h-4 w-4" />
+                              재료 추가
+                            </AppButton>
+                          </div>
+
+                          {draft.materials.length ? (
+                            <div className="overflow-hidden rounded-lg border">
+                              <Table className="w-full table-fixed">
+                                <colgroup>
+                                  <col style={{ width: "48%" }} />
+                                  <col style={{ width: "80px" }} />
+                                  <col style={{ width: "48px" }} />
+                                  <col style={{ width: "80px" }} />
+                                  <col style={{ width: "72px" }} />
+                                  <col style={{ width: "44px" }} />
+                                </colgroup>
+
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>이름</TableHead>
+                                    <TableHead>단가</TableHead>
+                                    <TableHead>수량</TableHead>
+                                    <TableHead className="text-right">합계</TableHead>
+                                    <TableHead className="text-right">라이브러리</TableHead>
+                                    <TableHead />
+                                  </TableRow>
+                                </TableHeader>
+
+                                <TableBody>
+                                  {draft.materials.map((m) => {
+                                    const total = (m.unitPrice || 0) * (m.quantity || 0)
+                                    return (
+                                      <TableRow key={m.id}>
+                                        <TableCell className="px-2 py-2">
+                                          <AppInput
+                                            className="h-8 w-full px-2 text-sm"
+                                            value={m.name}
+                                            placeholder="예: 원단"
+                                            onChange={(e) =>
+                                              updateMaterial(m.id, { name: e.target.value })
+                                            }
+                                          />
+                                        </TableCell>
+
+                                        <TableCell className="px-2 py-2">
+                                          <AppInput
+                                            className="h-8 w-full px-2 text-sm"
+                                            inputMode="numeric"
+                                            value={String(m.unitPrice)}
+                                            onChange={(e) =>
+                                              updateMaterial(m.id, {
+                                                unitPrice: clamp(toNumber(e.target.value), 0),
+                                              })
+                                            }
+                                          />
+                                        </TableCell>
+
+                                        <TableCell className="px-2 py-2">
+                                          <AppInput
+                                            className="h-8 w-full px-2 text-center text-sm"
+                                            inputMode="decimal"
+                                            value={String(Number(m.quantity) || 0)}
+                                            onChange={(e) => {
+                                              const n = clamp(toNumber(e.target.value), 0.0001)
+                                              updateMaterial(m.id, { quantity: n })
+                                            }}
+                                          />
+                                        </TableCell>
+
+                                        <TableCell className="px-2 py-2 text-right text-sm">
+                                          {formatCurrency(total)}
+                                        </TableCell>
+
+                                        <TableCell className="px-2 py-2 text-center align-middle">
+                                          {libraryNameSet.has(normName(m.name)) ? (
+                                            <Check className="inline-block h-4 w-4 text-muted-foreground" />
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => void addDraftMaterialToLibrary(m)}
+                                              title="라이브러리에 저장"
+                                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                                            >
+                                              <ArrowDownToLine className="h-4 w-4" />
+                                            </button>
+                                          )}
+                                        </TableCell>
+
+                                        <TableCell className="px-2 py-2 text-center align-middle">
+                                          <button
+                                            type="button"
+                                            onClick={() => removeMaterial(m.id)}
+                                            title="삭제"
+                                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-destructive focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </button>
+                                        </TableCell>
+                                      </TableRow>
+                                    )
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          ) : (
+                            <div className="text-sm text-muted-foreground">재료를 추가하세요.</div>
+                          )}
+                        </div>
+
+
+
+                        <Separator />
+
+                        <MarginSummaryCards draft={draft} />
+
+                        <div className="flex justify-end gap-2">
+                          <AppButton variant="secondary" onClick={() => setDialogOpen(false)}>
+                            닫기
+                          </AppButton>
+
+                          <AppButton
+                            onClick={() => void saveDraft()}
+                            disabled={!draft.name.trim() || saving}
+                          >
+                            {saving ? "저장 중..." : "저장"}
+                          </AppButton>
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="detail" className="space-y-6 pt-4">
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div className="space-y-2">
                             <div className="space-y-2">
@@ -1219,14 +1878,14 @@ export default function MarginCalculatorPage(props?: {
                                   라이브러리
                                 </AppButton>
                               </PopoverTrigger>
-                              <PopoverContent align="end" className="w-[360px] p-0">
+                              <PopoverContent align="end" className="w-[360px] p-0" onWheel={stopScrollPropagation}>
                                 <Command>
                                   <CommandInput
                                     value={libraryPickerQuery}
                                     onValueChange={setLibraryPickerQuery}
                                     placeholder="저장된 재료 검색..."
                                   />
-                                  <CommandList>
+                                  <CommandList className="max-h-[320px] overscroll-contain" onWheel={stopScrollPropagation}>
                                     <CommandEmpty>검색 결과가 없습니다.</CommandEmpty>
                                     <CommandGroup heading={`저장된 재료 (${library.length})`}>
                                       {(libraryPickerQuery.trim()
@@ -1538,6 +2197,11 @@ export default function MarginCalculatorPage(props?: {
                           </div>
                         </div>
 
+
+                        <Separator />
+
+                        <MarginSummaryCards draft={draft} />
+
                         <div className="flex justify-end gap-2">
                           <AppButton variant="secondary" onClick={() => setDialogOpen(false)}>
                             닫기
@@ -1552,159 +2216,6 @@ export default function MarginCalculatorPage(props?: {
                         </div>
                       </TabsContent>
 
-                      <TabsContent value="library" className="space-y-4 pt-4">
-                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                          <div className="space-y-2 md:col-span-2">
-                            <Label>검색</Label>
-                            <AppInput
-                              value={libSearch}
-                              onChange={(e) => setLibSearch(e.target.value)}
-                              placeholder="예: 원단, 지퍼, 라벨..."
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>빠른 추가 (이름)</Label>
-                            <AppInput
-                              value={newMaterialName}
-                              onChange={(e) => setNewMaterialName(e.target.value)}
-                              placeholder="예: 지퍼"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                          <div className="space-y-2">
-                            <Label>빠른 추가 (단가)</Label>
-                            <AppInput
-                              inputMode="numeric"
-                              value={newMaterialUnitPrice}
-                              onChange={(e) => setNewMaterialUnitPrice(e.target.value)}
-                              placeholder="예: 300"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>빠른 추가 (수량)</Label>
-                            <AppInput
-                              inputMode="decimal"
-                              value={newMaterialQty}
-                              onChange={(e) => setNewMaterialQty(e.target.value)}
-                              placeholder="예: 1"
-                            />
-                          </div>
-                          <div className="flex flex-col gap-2 md:col-span-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-end">
-                            <AppButton
-                              variant="secondary"
-                              onClick={() => {
-                                const name = newMaterialName.trim()
-                                const price = clamp(toNumber(newMaterialUnitPrice), 0)
-                                if (!name) return
-                                void upsertLibraryItem(name, price)
-                              }}
-                              title="이름 기준으로 라이브러리에 저장/갱신"
-                              className="w-full sm:w-auto"
-                            >
-                              <ArrowDownToLine className="mr-2 h-4 w-4" />
-                              라이브러리 저장
-                            </AppButton>
-
-                            <AppButton
-                              onClick={() => {
-                                const name = newMaterialName.trim()
-                                const price = clamp(toNumber(newMaterialUnitPrice), 0)
-                                if (!name) return
-                                setLastAddedLibraryId("quick-add")
-                                window.setTimeout(
-                                  () =>
-                                    setLastAddedLibraryId((cur) =>
-                                      cur === "quick-add" ? null : cur
-                                    ),
-                                  700
-                                )
-
-                                addMaterialToDraft(name, price)
-                              }}
-                              title="현재 수량으로 제품 재료에 추가"
-                              variant="default"
-                              className="w-full sm:w-auto"
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              제품에 추가
-                            </AppButton>
-                          </div>
-                        </div>
-
-                        <Separator />
-
-                        {sortedLibrary.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">
-                            아직 라이브러리가 비어 있습니다. 제품 재료에서 “라이브러리 저장” 버튼으로 쌓아두세요.
-                          </div>
-                        ) : (
-                          <div className="overflow-hidden rounded-lg border">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>이름</TableHead>
-                                  <TableHead className="w-44">단가</TableHead>
-                                  <TableHead className="w-24 text-right">추가</TableHead>
-                                  <TableHead className="w-16" />
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {sortedLibrary.map((it) => (
-                                  <TableRow key={it.id}>
-                                    <TableCell className="font-medium">{it.name}</TableCell>
-                                    <TableCell>
-                                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                        <AppInput
-                                          inputMode="numeric"
-                                          className="w-full sm:w-40"
-                                          value={libUnitPriceEdit[it.id] ?? String(it.unitPrice)}
-                                          onChange={(e) =>
-                                            setLibUnitPriceEdit((m) => ({
-                                              ...m,
-                                              [it.id]: e.target.value,
-                                            }))
-                                          }
-                                        />
-                                        <AppButton
-                                          variant="secondary"
-                                          size="sm"
-                                          className="self-end sm:self-auto"
-                                          onClick={() => void saveLibraryUnitPrice(it)}
-                                        >
-                                          저장
-                                        </AppButton>
-                                      </div>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                      <AppButton
-                                        variant={
-                                          lastAddedLibraryId === it.id ? "default" : "secondary"
-                                        }
-                                        size="sm"
-                                        onClick={() => addFromLibraryToDraft(it)}
-                                        title="현재 수량으로 제품 재료에 추가"
-                                      >
-                                        <Plus className="h-4 w-4" />
-                                      </AppButton>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                      <AppButton
-                                        variant="destructive"
-                                        size="sm"
-                                        onClick={() => void deleteLibraryItem(it.id)}
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </AppButton>
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        )}
-                      </TabsContent>
                     </Tabs>
                   )}
                 </DialogContent>
@@ -1830,8 +2341,24 @@ export default function MarginCalculatorPage(props?: {
                 ) : null}
               </div>
             )}
-          </AppCard>
-        </div>
+            </AppCard>
+          </TabsContent>
+
+          <TabsContent value="library" className="mt-0">
+            <AppCard
+              title="원부자재 라이브러리"
+              description={
+                loading
+                  ? "불러오는 중..."
+                  : sortedLibrary.length
+                    ? `총 ${sortedLibrary.length}개`
+                    : "아직 저장된 원부자재가 없습니다."
+              }
+            >
+              {renderLibraryManager({ showAddToDraft: false })}
+            </AppCard>
+          </TabsContent>
+        </Tabs>
       </div>
 
       <ConfirmDialog
