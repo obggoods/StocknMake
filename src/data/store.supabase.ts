@@ -20,6 +20,7 @@ type DBProduct = {
   price: number | null
   sku: string | null
   barcode: string | null
+  headquarters_stock_qty: number | null
 }
 
 type DBStore = {
@@ -232,7 +233,7 @@ export async function loadDataFromDB(): Promise<AppData> {
   ] = await Promise.all([
     supabase
       .from("products")
-      .select("id,name,category,active,make_enabled,created_at,price,sku,barcode")
+      .select("id,name,category,active,make_enabled,created_at,price,sku,barcode,headquarters_stock_qty")
       .eq("user_id", userId)
       .order("created_at"),
 
@@ -311,6 +312,7 @@ export async function loadDataFromDB(): Promise<AppData> {
       price: p.price ?? 0,
       sku: p.sku ?? null,
       barcode: p.barcode ?? null,
+      headquartersStockQty: p.headquarters_stock_qty ?? 0,
     })),
 
     stores: stores.map((s) => ({
@@ -750,6 +752,7 @@ export async function createProductDB(p: Product): Promise<void> {
       price: p.price ?? 0,
       sku: p.sku ?? null,
       barcode: p.barcode ?? null,
+      headquarters_stock_qty: Math.max(0, Math.floor(Number((p as any).headquartersStockQty ?? 0) || 0)),
     },
     { onConflict: "user_id,id" }
   )
@@ -917,6 +920,8 @@ export async function upsertProductsBulkDB(input: {
     price?: number | null
     sku?: string | null
     barcode?: string | null
+    headquarters_stock_qty?: number | null
+    headquartersStockQty?: number | null
   }>
 }): Promise<void> {
 
@@ -938,11 +943,36 @@ export async function upsertProductsBulkDB(input: {
     price: p.price ?? 0,
     sku: p.sku ?? null,
     barcode: p.barcode ?? null,
+    headquarters_stock_qty: Math.max(
+      0,
+      Math.floor(Number(p.headquarters_stock_qty ?? p.headquartersStockQty ?? 0) || 0)
+    ),
   }))
 
   const { error } = await supabase
     .from("products")
     .upsert(rows, { onConflict: "user_id,id" })
+
+  if (error) throw error
+}
+
+export async function updateProductHeadquartersStockQtyDB(input: {
+  productId: string
+  headquartersStockQty: number
+}): Promise<void> {
+
+  if (IS_MAINTENANCE) {
+    throw new Error("?꾩옱 ?쒖뒪???먭? 以묒엯?덈떎. ?좎떆 ???ㅼ떆 ?쒕룄?댁＜?몄슂.")
+  }
+
+  const userId = await requireUserId()
+  const nextQty = Math.max(0, Math.floor(Number(input.headquartersStockQty) || 0))
+
+  const { error } = await supabase
+    .from("products")
+    .update({ headquarters_stock_qty: nextQty })
+    .eq("user_id", userId)
+    .eq("id", input.productId)
 
   if (error) throw error
 }
@@ -1346,7 +1376,7 @@ export async function searchProductsForSettlementDB(input: {
 
   const { data, error } = await supabase
     .from("products")
-    .select("id,name,category,active,make_enabled,created_at,price,sku,barcode")
+    .select("id,name,category,active,make_enabled,created_at,price,sku,barcode,headquarters_stock_qty")
     .eq("user_id", userId)
     .or(`name.ilike.%${q}%,sku.ilike.%${q}%,barcode.ilike.%${q}%`)
     .limit(input.limit ?? 20)
