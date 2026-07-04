@@ -408,6 +408,7 @@ export default function SettlementsPage() {
           storeId={storeId}
           items={items}
           storeNameById={storeNameById}
+          productMap={productMap}
         />
       </div>
 
@@ -582,6 +583,7 @@ export default function SettlementsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[120px]">카테고리</TableHead>
                     <TableHead>상품</TableHead>
                     <TableHead className="w-[90px] text-right">판매</TableHead>
                     <TableHead className="w-[110px] text-right">단가</TableHead>
@@ -603,9 +605,15 @@ export default function SettlementsPage() {
                       productMap,
                       stores
                     )
+                    const productId = String(l.product_id ?? "")
+                    const categoryName = productMap.get(productId)?.category ?? null
 
                     return (
                       <TableRow key={l.id}>
+                        <TableCell className="max-w-[120px] truncate text-muted-foreground">
+                          {categoryName ? String(categoryName) : "-"}
+                        </TableCell>
+
                         <TableCell className="truncate">
                           {l.product_name_matched ?? l.product_name_raw}
                         </TableCell>
@@ -848,15 +856,19 @@ function TopProductsMiniCard(props: {
   storeId: string
   items: any[]
   storeNameById: Map<string, string>
+  productMap: Map<string, any>
 }) {
-  const { month, storeId, storeNameById } = props
+  const { month, storeId, storeNameById, productMap } = props
 
   const [openKey, setOpenKey] = useState<string>("")
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string>("")
   const [rows, setRows] = useState<
     Array<{
+      key: string
+      productId: string | null
       name: string
+      categoryName: string | null
       qty: number
       gross: number
       byMarketplace: Array<{
@@ -886,6 +898,9 @@ function TopProductsMiniCard(props: {
           const agg = new Map<
             string,
             {
+              productId: string | null
+              name: string
+              categoryName: string | null
               qty: number
               gross: number
               by: Map<string, { qty: number; gross: number }>
@@ -894,13 +909,25 @@ function TopProductsMiniCard(props: {
 
           for (const row of stats ?? []) {
             const name = String((row as any).product_name ?? "상품").trim() || "상품"
+            const productId = (row as any).product_id ? String((row as any).product_id) : null
+            const product = productId ? productMap.get(productId) : null
+            const displayName = product ? String(product.name ?? name).trim() || name : name
+            const categoryName = product ? String(product.category ?? "").trim() || null : null
+            const key = productId ? `product:${productId}` : `unmatched:${name}`
             const mid = String((row as any).marketplace_id ?? "")
             const qty = Number((row as any).qty_sold_sum ?? 0) || 0
             const gross = Number((row as any).gross_amount_sum ?? 0) || 0
 
             const cur =
-              agg.get(name) ??
-              { qty: 0, gross: 0, by: new Map<string, { qty: number; gross: number }>() }
+              agg.get(key) ??
+              {
+                productId,
+                name: displayName,
+                categoryName,
+                qty: 0,
+                gross: 0,
+                by: new Map<string, { qty: number; gross: number }>(),
+              }
 
             cur.qty += qty
             cur.gross += gross
@@ -913,11 +940,11 @@ function TopProductsMiniCard(props: {
               })
             }
 
-            agg.set(name, cur)
+            agg.set(key, cur)
           }
 
           const out = Array.from(agg.entries())
-            .map(([name, v]) => {
+            .map(([key, v]) => {
               const byMarketplace = Array.from(v.by.entries())
                 .map(([marketplaceId, mv]) => ({
                   marketplaceId,
@@ -929,7 +956,10 @@ function TopProductsMiniCard(props: {
                 .slice(0, 5)
 
               return {
-                name,
+                key,
+                productId: v.productId,
+                name: v.name,
+                categoryName: v.categoryName,
                 qty: v.qty,
                 gross: v.gross,
                 byMarketplace,
@@ -955,7 +985,7 @@ function TopProductsMiniCard(props: {
     return () => {
       cancelled = true
     }
-  }, [month, storeId, storeNameById])
+  }, [month, storeId, storeNameById, productMap])
 
   const scopeLabel =
     storeId && storeId.trim()
@@ -981,17 +1011,22 @@ function TopProductsMiniCard(props: {
         ) : (
           <div className="space-y-2">
             {rows.map((r, idx) => {
-              const opened = openKey === r.name
+              const opened = openKey === r.key
 
               return (
-                <div key={`${r.name}-${idx}`} className="rounded-lg border bg-background">
+                <div key={r.key} className="rounded-lg border bg-background">
                   <button
                     type="button"
-                    onClick={() => setOpenKey(opened ? "" : r.name)}
+                    onClick={() => setOpenKey(opened ? "" : r.key)}
                     className="w-full rounded-lg px-3 py-2 text-left hover:bg-accent/20"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
+                        {r.categoryName ? (
+                          <div className="truncate text-xs text-muted-foreground">
+                            {r.categoryName}
+                          </div>
+                        ) : null}
                         <div className="truncate text-sm font-medium">{r.name}</div>
                         <div className="text-xs text-muted-foreground">
                           {fmtKRW(r.gross)}원 · {r.qty.toLocaleString()}개
@@ -1018,10 +1053,10 @@ function TopProductsMiniCard(props: {
                           r.byMarketplace.map((b) => (
                             <div
                               key={b.marketplaceId}
-                              className="flex items-center justify-between text-sm"
+                              className="flex items-start justify-between gap-3 text-sm"
                             >
-                              <div className="truncate">{b.marketplaceName}</div>
-                              <div className="tabular-nums text-muted-foreground">
+                              <div className="min-w-0 truncate">{b.marketplaceName}</div>
+                              <div className="shrink-0 text-right tabular-nums text-muted-foreground">
                                 {b.qty.toLocaleString()}개 · {fmtKRW(b.gross)}원
                               </div>
                             </div>

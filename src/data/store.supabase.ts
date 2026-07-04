@@ -448,7 +448,33 @@ export async function recomputeSettlementProductStatsDB(input: {
 
   if (lErr) throw lErr
 
-  // 5) 상품명 기준 집계
+  const productIds = Array.from(
+    new Set(
+      (lines ?? [])
+        .map((row: any) => (row.product_id ? String(row.product_id) : ""))
+        .filter(Boolean)
+    )
+  )
+  const productDisplayById = new Map<string, string>()
+
+  if (productIds.length > 0) {
+    const { data: products, error: pErr } = await supabase
+      .from("products")
+      .select("id,name,category")
+      .eq("user_id", userId)
+      .in("id", productIds)
+
+    if (pErr) throw pErr
+
+    for (const product of products ?? []) {
+      const name = String((product as any).name ?? "").trim()
+      const category = String((product as any).category ?? "").trim()
+      const label = category && name ? `${category} / ${name}` : name || category
+      productDisplayById.set(String((product as any).id), label || "상품")
+    }
+  }
+
+  // 5) product_id 기준 집계. 미매칭 행은 기존처럼 표시명 기준으로 유지한다.
   const agg = new Map<
     string,
     {
@@ -464,13 +490,15 @@ export async function recomputeSettlementProductStatsDB(input: {
       String((row as any).product_name_matched ?? (row as any).product_name_raw ?? "상품").trim() || "상품"
 
     const productId = (row as any).product_id ? String((row as any).product_id) : null
+    const productDisplayName = productId ? productDisplayById.get(productId) : null
     const qtySold = Number((row as any).qty_sold ?? 0) || 0
     const grossAmount = Number((row as any).gross_amount ?? 0) || 0
+    const key = productId ? `product:${productId}` : `unmatched:${productName}`
 
     const current =
-      agg.get(productName) ?? {
+      agg.get(key) ?? {
         productId,
-        productName,
+        productName: productDisplayName ?? productName,
         qtySoldSum: 0,
         grossAmountSum: 0,
       }
@@ -478,11 +506,7 @@ export async function recomputeSettlementProductStatsDB(input: {
     current.qtySoldSum += qtySold
     current.grossAmountSum += grossAmount
 
-    if (!current.productId && productId) {
-      current.productId = productId
-    }
-
-    agg.set(productName, current)
+    agg.set(key, current)
   }
 
   // 6) 저장
@@ -499,11 +523,7 @@ export async function recomputeSettlementProductStatsDB(input: {
 
   if (rows.length === 0) return
 
-  const { error: insErr } = await supabase
-    .from("settlement_product_stats")
-    .upsert(rows, {
-      onConflict: "user_id,marketplace_id,period_month,product_name",
-    })
+  const { error: insErr } = await supabase.from("settlement_product_stats").insert(rows)
 
   if (insErr) throw insErr
 }
@@ -514,33 +534,79 @@ export async function listSettlementProductStatsDB(input: {
 }) {
   const userId = await requireUserId()
 
-  let q = supabase
-    .from("settlement_product_stats")
-    .select(
-      [
-        "id",
-        "user_id",
-        "marketplace_id",
-        "period_month",
-        "product_id",
-        "product_name",
-        "qty_sold_sum",
-        "gross_amount_sum",
-        "updated_at",
-      ].join(",")
-    )
+  let settlementsQuery = supabase
+    .from("settlements_v2")
+    .select("id")
     .eq("user_id", userId)
     .eq("period_month", input.periodMonth)
-    .order("qty_sold_sum", { ascending: false })
-    .order("gross_amount_sum", { ascending: false })
+    .eq("settlement_type", "detailed")
 
   if (input.marketplaceId) {
-    q = q.eq("marketplace_id", input.marketplaceId)
+    settlementsQuery = settlementsQuery.eq("marketplace_id", input.marketplaceId)
   }
 
-  const { data, error } = await q
+  const { data: settlements, error: settlementsError } = await settlementsQuery
+  if (settlementsError) throw settlementsError
+
+  const settlementIds = (settlements ?? []).map((row: any) => String(row.id))
+  if (settlementIds.length === 0) return []
+
+  const { data, error } = await supabase
+    .from("settlement_lines_v2")
+    .select("marketplace_id,product_id,product_name_raw,product_name_matched,qty_sold,gross_amount")
+    .eq("user_id", userId)
+    .in("settlement_id", settlementIds)
+
   if (error) throw error
-  return data ?? []
+
+  const agg = new Map<
+    string,
+    {
+      marketplaceId: string
+      productId: string | null
+      productName: string
+      qtySoldSum: number
+      grossAmountSum: number
+    }
+  >()
+
+  for (const row of data ?? []) {
+    const marketplaceId = String((row as any).marketplace_id ?? "")
+    const productId = (row as any).product_id ? String((row as any).product_id) : null
+    const productName =
+      String((row as any).product_name_matched ?? (row as any).product_name_raw ?? "상품").trim() ||
+      "상품"
+    const key = productId
+      ? `${marketplaceId}::product:${productId}`
+      : `${marketplaceId}::unmatched:${productName}`
+    const current =
+      agg.get(key) ?? {
+        marketplaceId,
+        productId,
+        productName,
+        qtySoldSum: 0,
+        grossAmountSum: 0,
+      }
+
+    current.qtySoldSum += Number((row as any).qty_sold ?? 0) || 0
+    current.grossAmountSum += Number((row as any).gross_amount ?? 0) || 0
+    agg.set(key, current)
+  }
+
+  return Array.from(agg.values())
+    .map((row) => ({
+      marketplace_id: row.marketplaceId,
+      period_month: input.periodMonth,
+      product_id: row.productId,
+      product_name: row.productName,
+      qty_sold_sum: row.qtySoldSum,
+      gross_amount_sum: row.grossAmountSum,
+    }))
+    .sort((a, b) => {
+      const qtyDiff = Number(b.qty_sold_sum ?? 0) - Number(a.qty_sold_sum ?? 0)
+      if (qtyDiff !== 0) return qtyDiff
+      return Number(b.gross_amount_sum ?? 0) - Number(a.gross_amount_sum ?? 0)
+    })
 }
 
 /* =========================
