@@ -160,6 +160,10 @@ export default function SettlementsPage() {
     if (!detail?.lines) {
       return {
         totalCost: 0,
+        totalRevenue: 0,
+        totalCommission: 0,
+        totalVat: 0,
+        totalRentFee: 0,
         totalProfit: 0,
         avgMarginRate: 0,
         unmatched: 0,
@@ -169,6 +173,8 @@ export default function SettlementsPage() {
     let totalCost = 0
     let totalProfit = 0
     let totalRevenue = 0
+    let totalCommission = 0
+    let totalVat = 0
     let unmatched = 0
 
     for (const l of detail.lines) {
@@ -183,14 +189,29 @@ export default function SettlementsPage() {
       totalCost += calc.cost
       totalProfit += calc.profit
       totalRevenue += Number(l.gross_amount ?? 0)
+      totalCommission += calc.commission
+      totalVat += calc.vat
 
       if (calc.matched === "none") {
         unmatched++
       }
     }
 
+    const store = stores.find(
+      (s: any) => String(s.id) === String(detail.settlement?.marketplace_id)
+    )
+    const includeRent = store?.includeMonthlyRentInMargin ?? true
+    const totalRentFee = includeRent
+      ? Math.max(0, Number(store?.storeFee ?? store?.monthlyRentFee ?? 0) || 0)
+      : 0
+    totalProfit -= totalRentFee
+
     return {
       totalCost,
+      totalRevenue,
+      totalCommission,
+      totalVat,
+      totalRentFee,
       totalProfit,
       avgMarginRate:
         totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
@@ -579,6 +600,26 @@ export default function SettlementsPage() {
                 </div>
               </AppCard>
             </div>
+            <div className="rounded-xl border bg-muted/20 p-4 text-sm">
+              <div className="mb-3 font-medium">순마진 계산</div>
+              <div className="space-y-2">
+                <BreakdownRow label="매출" value={summary.totalRevenue} />
+                <BreakdownRow label="판매수수료" value={-summary.totalCommission} muted />
+                <BreakdownRow label="상품원가" value={-summary.totalCost} muted />
+                <BreakdownRow label="VAT" value={-summary.totalVat} muted />
+                {summary.totalRentFee > 0 ? (
+                  <BreakdownRow label="월 입점비" value={-summary.totalRentFee} muted />
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">월 입점비</span>
+                    <span className="text-muted-foreground">(계산 제외 또는 0원)</span>
+                  </div>
+                )}
+                <div className="border-t pt-2">
+                  <BreakdownRow label="순마진" value={summary.totalProfit} strong />
+                </div>
+              </div>
+            </div>
             <div className="overflow-hidden rounded-xl border">
               <Table>
                 <TableHeader>
@@ -599,7 +640,10 @@ export default function SettlementsPage() {
                 <TableBody>
                   {detail.lines.map((l: any) => {
                     const calc = calcNetProfit(
-                      l,
+                      {
+                        ...l,
+                        commission_rate: detail.settlement?.commission_rate ?? l.commission_rate,
+                      },
                       productCostMap,
                       categoryCostMap,
                       productMap,
@@ -786,6 +830,22 @@ export default function SettlementsPage() {
   )
 }
 
+function BreakdownRow(props: {
+  label: string
+  value: number
+  muted?: boolean
+  strong?: boolean
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className={props.muted ? "text-muted-foreground" : ""}>{props.label}</span>
+      <span className={props.strong ? "font-semibold tabular-nums" : "text-muted-foreground tabular-nums"}>
+        {fmtKRW(props.value)}원
+      </span>
+    </div>
+  )
+}
+
 function calcNetProfit(
   line: any,
   productCostMap: Map<string, number>,
@@ -824,11 +884,15 @@ function calcNetProfit(
     (s: any) => String(s.id) === String(line.marketplace_id)
   )
 
-  const commissionRate =
+  const commissionRateRaw =
     lineCommissionRate != null
       ? lineCommissionRate
-      : Number(store?.commission_rate ?? 0)
-  const commission = revenue * (commissionRate / 100)
+      : Number(store?.commissionRate ?? store?.commission_rate ?? 0)
+  const commissionRateDecimal =
+    lineCommissionRate != null && commissionRateRaw <= 1
+      ? commissionRateRaw
+      : commissionRateRaw / 100
+  const commission = revenue * commissionRateDecimal
 
   // VAT (일단 10% 고정, 이후 개선 가능)
   const vat = revenue * 0.1
@@ -838,6 +902,8 @@ function calcNetProfit(
 
   return {
     cost: totalCost,
+    commission,
+    vat,
     profit,
     marginRate,
     matched:

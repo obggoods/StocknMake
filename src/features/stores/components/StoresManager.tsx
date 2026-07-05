@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Trash2 } from "lucide-react"
+import { formatCommissionPercent } from "@/lib/commissionRate"
 
 function statusLabel(v?: any) {
   return v === "inactive" ? "퇴점" : "입점중"
@@ -414,7 +415,7 @@ export default function StoresManager() {
 </TableCell>
 
                       <TableCell className="text-right tabular-nums">
-                        {s.commissionRate == null ? "-" : `${s.commissionRate}%`}
+                        {s.commissionRate == null ? "-" : `${formatCommissionPercent(s.commissionRate)}%`}
                       </TableCell>
 
                       <TableCell className="hidden md:table-cell">

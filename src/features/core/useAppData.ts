@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent } from "react"
 import { toast } from "@/lib/toast"
+import { parseCommissionPercentInput } from "@/lib/commissionRate"
 import * as XLSX from "xlsx"
 import type { AppData } from "@/data/models"
 import { downloadJson, generateId, readJsonFile } from "@/data/store"
@@ -429,7 +430,8 @@ const createStoreWithFields = useCallback(
       channel: input.channel ?? "offline",
       tags: input.tags ?? [],
 
-      storeFee: input.storeFee ?? null,
+      storeFee: Math.max(0, Number(input.storeFee ?? 0) || 0),
+      includeMonthlyRentInMargin: input.includeMonthlyRentInMargin ?? true,
       settlementCycle: input.settlementCycle ?? null,
       settlementDay: input.settlementDay ?? null,
       settlementNote: input.settlementNote ?? null,
@@ -694,7 +696,7 @@ const createStoreWithFields = useCallback(
     if (!name) return
     const commissionRaw = newStoreCommissionInput.trim()
 const commissionRate =
-  commissionRaw === "" ? null : Math.max(0, Number(commissionRaw) || 0)
+  commissionRaw === "" ? null : parseCommissionPercentInput(commissionRaw)
 
 const targetRaw = newStoreTargetQtyInput.trim()
 const targetQtyOverride =
@@ -716,6 +718,8 @@ const s = {
   phone,
   address,
   memo,
+  storeFee: null,
+  includeMonthlyRentInMargin: true,
 }
 
     const prevStores = data.stores
@@ -843,6 +847,7 @@ setNewStoreMemo("")
         channel?: "online" | "offline" | null
         tags?: string[] | null
         storeFee?: number | null
+        includeMonthlyRentInMargin?: boolean | null
         settlementCycle?: "monthly" | "weekly" | "biweekly" | "ad-hoc" | null
         settlementDay?: number | null
         settlementNote?: string | null
@@ -884,7 +889,12 @@ setNewStoreMemo("")
         channel: input.channel ?? (hit as any).channel ?? "offline",
         tags: cleanedTags,
   
-        storeFee: input.storeFee ?? (hit as any).storeFee ?? null,
+        storeFee: Math.max(
+          0,
+          Number(input.storeFee ?? (hit as any).storeFee ?? (hit as any).monthlyRentFee ?? 0) || 0
+        ),
+        includeMonthlyRentInMargin:
+          input.includeMonthlyRentInMargin ?? (hit as any).includeMonthlyRentInMargin ?? true,
         settlementCycle: input.settlementCycle ?? (hit as any).settlementCycle ?? null,
         settlementDay: safeSettlementDay,
         settlementNote: input.settlementNote ?? (hit as any).settlementNote ?? null,

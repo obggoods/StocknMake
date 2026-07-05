@@ -30,6 +30,7 @@ const navSections: Array<{
       title: "도구",
       items: [
         { to: "/margin", label: "마진" },
+        { to: "/analysis", label: "분석" },
       ],
     },
     {
