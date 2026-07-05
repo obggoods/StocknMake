@@ -27,12 +27,6 @@ import {
 
 import { toast } from "@/lib/toast"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
   Table,
   TableBody,
   TableCell,
@@ -285,11 +279,6 @@ export default function SettlementsPage() {
     }
   }
 
-  const handleCreateProfile = () => {
-    setCostPickerOpen(false)
-    window.location.href = "/margin"
-  }
-
   const handleConnectProfile = async (profileId: string) => {
     if (!targetLine) return
 
@@ -298,18 +287,39 @@ export default function SettlementsPage() {
     if (!user) return
 
     const productId = String(targetLine.product_id ?? "")
+    if (!productId) {
+      toast.error("제품 정보가 없어 원가 프로필을 연결할 수 없습니다.")
+      return
+    }
+
+    const productBelongsToCurrentUser = (a.data.products ?? []).some(
+      (product: any) => String(product.id) === productId
+    )
+    if (!productBelongsToCurrentUser) {
+      toast.error("현재 사용자 제품에만 원가 프로필을 연결할 수 있습니다.")
+      return
+    }
+
+    const profileBelongsToCurrentUser = marginProfiles.some(
+      (profile: any) => String(profile.id) === String(profileId)
+    )
+    if (!profileBelongsToCurrentUser) {
+      toast.error("현재 사용자 원가 프로필만 연결할 수 있습니다.")
+      return
+    }
 
     try {
       // 기존 매핑 제거 (중복 방지)
-      await supabase
+      const { error: deleteError } = await supabase
         .from("margin_profile_targets")
         .delete()
         .eq("user_id", user.id)
         .eq("target_type", "product")
         .eq("target_key", productId)
+      if (deleteError) throw deleteError
 
       // 새 매핑 추가
-      await supabase
+      const { error: insertError } = await supabase
         .from("margin_profile_targets")
         .insert({
           user_id: user.id,
@@ -317,6 +327,7 @@ export default function SettlementsPage() {
           target_type: "product",
           target_key: productId,
         })
+      if (insertError) throw insertError
 
       toast.success("원가 프로필 연결 완료")
 
@@ -800,7 +811,10 @@ export default function SettlementsPage() {
 
                 <AppButton
                   variant="secondary"
-                  onClick={() => setCreateProfileOpen(true)}
+                  onClick={() => {
+                    setCostPickerOpen(false)
+                    setCreateProfileOpen(true)
+                  }}
                 >
                   + 새 원가 프로필 만들기
                 </AppButton>
@@ -811,20 +825,21 @@ export default function SettlementsPage() {
           cancelText="취소"
           onConfirm={() => setCostPickerOpen(false)}
         />
-        <Dialog open={createProfileOpen} onOpenChange={setCreateProfileOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>원가 프로필 생성</DialogTitle>
-            </DialogHeader>
-            <MarginCalculatorPage
-              embedded
-              onSaved={async () => {
-                setCreateProfileOpen(false)
-                await loadMarginData()
-              }}
-            />
-          </DialogContent>
-        </Dialog>
+        {createProfileOpen && targetLine ? (
+          <MarginCalculatorPage
+            embedded
+            initialProductId={String(targetLine.product_id ?? "")}
+            initialProductName={String(
+              targetLine.product_name_matched ?? targetLine.product_name_raw ?? ""
+            )}
+            initialStoreId={String(detail?.settlement?.marketplace_id ?? "")}
+            onClose={() => setCreateProfileOpen(false)}
+            onSaved={async () => {
+              setCreateProfileOpen(false)
+              await loadMarginData()
+            }}
+          />
+        ) : null}
       </AppCard>
     </div>
   )

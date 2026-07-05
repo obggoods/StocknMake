@@ -312,6 +312,10 @@ const ITEMS_PER_PAGE = 10
 export default function MarginCalculatorPage(props?: {
   embedded?: boolean
   onSaved?: () => void
+  onClose?: () => void
+  initialProductId?: string
+  initialProductName?: string
+  initialStoreId?: string
 }) {
   const [marginProducts, setMarginProducts] = useState<Product[]>([])
   const [products, setProducts] = useState<any[]>([])
@@ -327,11 +331,6 @@ export default function MarginCalculatorPage(props?: {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
-  useEffect(() => {
-    if (props?.embedded) {
-      openCreate()
-    }
-  }, [])
   const [editing, setEditing] = useState<Product | null>(null)
   const [isReadOnly, setIsReadOnly] = useState(false)
   const [selectedProductId, setSelectedProductId] = useState<string>("")
@@ -559,6 +558,8 @@ export default function MarginCalculatorPage(props?: {
         return [saved, ...prev]
       })
 
+      toast.success("원가 프로필이 저장되었습니다.")
+
       if (props?.onSaved) {
         props.onSaved()
       } else {
@@ -693,16 +694,34 @@ export default function MarginCalculatorPage(props?: {
   }, [products, selectedCategory])
 
   const openCreate = () => {
+    const nextDraft = emptyProduct()
+    const initialProductName = String(props?.initialProductName ?? "").trim()
+    if (initialProductName) {
+      nextDraft.name = initialProductName
+    }
+
     setEditing(null)
     setIsReadOnly(false)
-    setSelectedProductId("")
-    setSelectedStoreId("")
-    setDraft(emptyProduct())
+    setSelectedProductId(props?.initialProductId ?? "")
+    setSelectedStoreId(props?.initialStoreId ?? "")
+    setSelectedCategory("")
+    setDraft(nextDraft)
     setNewMaterialName("")
     setNewMaterialUnitPrice("")
     setNewMaterialQty("1")
     setDialogOpen(true)
   }
+
+  useEffect(() => {
+    if (props?.embedded) {
+      openCreate()
+    }
+  }, [
+    props?.embedded,
+    props?.initialProductId,
+    props?.initialProductName,
+    props?.initialStoreId,
+  ])
 
   const openEdit = (p: Product) => {
     const next = migrateProduct(p)
@@ -1285,16 +1304,8 @@ export default function MarginCalculatorPage(props?: {
     )
   }
 
-  if (props?.embedded) {
-    return (
-      <>
-        {/* 아무것도 렌더 안하지만 내부 useEffect는 살아있게 */}
-      </>
-    )
-  }
-
   return (
-    <AppSection>
+    <AppSection className={props?.embedded ? "hidden" : undefined}>
       {!props?.embedded && (
         <PageHeader
           title="마진 계산기"
@@ -1354,6 +1365,7 @@ export default function MarginCalculatorPage(props?: {
                   if (!open) {
                     setIsReadOnly(false)
                     setEditing(null)
+                    props?.onClose?.()
                   }
                 }}
               >
