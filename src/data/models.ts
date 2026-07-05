@@ -32,6 +32,8 @@ export type Store = {
   tags?: string[] | null
 
   storeFee?: number | null
+  monthlyRentFee?: number | null
+  includeMonthlyRentInMargin?: boolean | null
   settlementCycle?: "monthly" | "weekly" | "biweekly" | "ad-hoc" | null
   settlementDay?: number | null
   settlementNote?: string | null

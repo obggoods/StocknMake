@@ -15,6 +15,7 @@ const StoresPage = lazy(() => import("./features/stores/pages/StoresPage"))
 const SettingsPage = lazy(() => import("./features/settings/pages/SettingsPage"))
 const MarginCalculatorPage = lazy(() => import("./features/margin/pages/MarginCalculatorPage"))
 const SettlementsPage = lazy(() => import("./features/settlements/pages/SettlementsPage"))
+const AnalysisPage = lazy(() => import("./features/analysis/pages/AnalysisPage"))
 const AdminInvitesPage = lazy(() => import("./pages_legacy/AdminInvites"))
 const LoginPage = lazy(() => import("./pages_legacy/Login"))
 const InviteGatePage = lazy(() => import("./pages_legacy/InviteGate"))
@@ -256,6 +257,7 @@ useEffect(() => {
             <Route path="/stores" element={<StoresPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/margin" element={<MarginCalculatorPage />} />
+            <Route path="/analysis" element={<AnalysisPage />} />
             <Route path="/settlements" element={<SettlementsPage />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route

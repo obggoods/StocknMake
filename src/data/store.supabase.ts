@@ -38,6 +38,8 @@ type DBStore = {
   channel: string | null
   tags: string[] | null
   store_fee: number | null
+  monthly_rent_fee: number | null
+  include_monthly_rent_in_margin: boolean | null
   settlement_cycle: string | null
   settlement_day: number | null
   settlement_note: string | null
@@ -111,6 +113,22 @@ type DBSettlementLine = {
   gross_amount: number
   match_status: "matched" | "unmatched" | "manual"
   created_at: string
+}
+
+type DBSettlementAnalysisHeader = {
+  id: string
+  marketplace_id: string | null
+  period_month: string | null
+}
+
+type DBSettlementAnalysisLine = {
+  settlement_id: string | null
+  marketplace_id: string | null
+  product_id: string | null
+  product_name_raw: string | null
+  product_name_matched: string | null
+  qty_sold: number | null
+  gross_amount: number | null
 }
 
 
@@ -240,7 +258,7 @@ export async function loadDataFromDB(): Promise<AppData> {
       .from("stores")
       .select(
         "id,name,created_at,commission_rate,memo,target_qty_override,contact_name,phone,address," +
-          "store_status,channel,tags,store_fee,settlement_cycle,settlement_day,settlement_note"
+          "store_status,channel,tags,store_fee,monthly_rent_fee,include_monthly_rent_in_margin,settlement_cycle,settlement_day,settlement_note"
       )
       .eq("user_id", userId)
       .order("created_at")
@@ -331,7 +349,9 @@ export async function loadDataFromDB(): Promise<AppData> {
       tags: s.tags ?? [],
 
       // ✅ 비용/정산 운영
-      storeFee: s.store_fee ?? null,
+      storeFee: s.store_fee ?? s.monthly_rent_fee ?? null,
+      monthlyRentFee: s.monthly_rent_fee ?? null,
+      includeMonthlyRentInMargin: s.include_monthly_rent_in_margin ?? true,
       settlementCycle: (s.settlement_cycle as any) ?? null,
       settlementDay: s.settlement_day ?? null,
       settlementNote: s.settlement_note ?? null,
@@ -611,6 +631,74 @@ export async function listSettlementProductStatsDB(input: {
    Category (분리 관리)
 ========================= */
 
+export async function listSettlementAnalysisLinesDB(input: {
+  months: string[]
+}): Promise<
+  Array<{
+    settlementId: string
+    storeId: string
+    month: string
+    productId: string | null
+    productNameRaw: string
+    productNameMatched: string | null
+    qty: number
+    amount: number
+  }>
+> {
+  const userId = await requireUserId()
+  const months = Array.from(new Set(input.months.map((month) => String(month).trim()).filter(Boolean)))
+
+  if (months.length === 0) return []
+
+  const { data: settlements, error: settlementsError } = await supabase
+    .from("settlements_v2")
+    .select("id,marketplace_id,period_month")
+    .eq("user_id", userId)
+    .eq("settlement_type", "detailed")
+    .in("period_month", months)
+
+  if (settlementsError) throw settlementsError
+
+  const settlementRows = (settlements ?? []) as DBSettlementAnalysisHeader[]
+  const settlementIds = settlementRows.map((row) => String(row.id)).filter(Boolean)
+
+  if (settlementIds.length === 0) return []
+
+  const settlementById = new Map(
+    settlementRows.map((row) => [
+      String(row.id),
+      {
+        storeId: String(row.marketplace_id ?? ""),
+        month: String(row.period_month ?? ""),
+      },
+    ])
+  )
+
+  const { data: lines, error: linesError } = await supabase
+    .from("settlement_lines_v2")
+    .select("settlement_id,marketplace_id,product_id,product_name_raw,product_name_matched,qty_sold,gross_amount")
+    .eq("user_id", userId)
+    .in("settlement_id", settlementIds)
+
+  if (linesError) throw linesError
+
+  return ((lines ?? []) as DBSettlementAnalysisLine[]).map((line) => {
+    const settlementId = String(line.settlement_id ?? "")
+    const settlement = settlementById.get(settlementId)
+
+    return {
+      settlementId,
+      storeId: String(line.marketplace_id ?? settlement?.storeId ?? ""),
+      month: String(settlement?.month ?? ""),
+      productId: line.product_id ? String(line.product_id) : null,
+      productNameRaw: String(line.product_name_raw ?? ""),
+      productNameMatched: line.product_name_matched == null ? null : String(line.product_name_matched),
+      qty: Number(line.qty_sold ?? 0) || 0,
+      amount: Number(line.gross_amount ?? 0) || 0,
+    }
+  })
+}
+
 export async function loadCategoriesDB(): Promise<string[]> {
   const userId = await requireUserId()
 
@@ -856,7 +944,8 @@ export async function createStoreDB(s: Store): Promise<void> {
       channel: (s as any).channel ?? "offline",
       tags: (s as any).tags ?? [],
 
-      store_fee: (s as any).storeFee ?? null,
+      store_fee: Math.max(0, Number((s as any).storeFee ?? (s as any).monthlyRentFee ?? 0) || 0),
+      include_monthly_rent_in_margin: (s as any).includeMonthlyRentInMargin ?? true,
       settlement_cycle: (s as any).settlementCycle ?? null,
       settlement_day: (s as any).settlementDay ?? null,
       settlement_note: (s as any).settlementNote ?? null,
@@ -905,7 +994,8 @@ export async function updateStoreDB(s: Store): Promise<void> {
       channel: (s as any).channel ?? "offline",
       tags: (s as any).tags ?? [],
 
-      store_fee: (s as any).storeFee ?? null,
+      store_fee: Math.max(0, Number((s as any).storeFee ?? (s as any).monthlyRentFee ?? 0) || 0),
+      include_monthly_rent_in_margin: (s as any).includeMonthlyRentInMargin ?? true,
       settlement_cycle: (s as any).settlementCycle ?? null,
       settlement_day: (s as any).settlementDay ?? null,
       settlement_note: (s as any).settlementNote ?? null,

@@ -45,6 +45,10 @@ import {
 } from "@/data/store.supabase"
 
 import { generateId } from "@/data/store"
+import {
+  formatCommissionPercent,
+  parseCommissionPercentInput,
+} from "@/lib/commissionRate"
 import * as XLSX from "xlsx"
 
 type SettlementUploadRow = {
@@ -691,7 +695,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
         return
       }
 
-      const commissionRatePercent = commissionRate ?? 0
+      const commissionRatePercent = Number(formatCommissionPercent(commissionRate ?? 0))
 
       if (!Number.isFinite(commissionRatePercent) || commissionRatePercent < 0 || commissionRatePercent > 100) {
         toast.error("수수료율은 0~100 사이로 입력해주세요.")
@@ -835,7 +839,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
 
         const grossAmount = lines.reduce((sum, l) => sum + l.grossAmount, 0)
 
-        let commissionRateFinal = (commissionRate ?? 0) / 100
+        let commissionRateFinal = Number(formatCommissionPercent(commissionRate ?? 0)) / 100
         let storeCommissionRateFromDB = 0
 
         try {
@@ -851,7 +855,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
             commissionRateFinal = storeCommissionRateFromDB
           } else {
             const store = a.data.stores.find((s: any) => s.id === g.storeId)
-            const pct = Number(store?.commissionRate ?? 0) || 0
+            const pct = Number(formatCommissionPercent(store?.commissionRate ?? 0)) || 0
             commissionRateFinal = pct / 100
           }
         }
@@ -1065,7 +1069,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                         setCommissionEditing(true)
                       }}
                     >
-                      {commissionRate}%
+                      {formatCommissionPercent(commissionRate)}%
                     </span>
                   ) : (
                     <div className="flex items-center gap-1">
@@ -1073,10 +1077,12 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                         type="number"
                         min={0}
                         max={100}
+                        step={0.1}
+                        inputMode="decimal"
                         value={commissionDraft}
                         onChange={(e) => {
-                          const v = Number(e.target.value)
-                          if (Number.isNaN(v)) return
+                          const v = parseCommissionPercentInput(e.target.value)
+                          if (v == null) return
                           setCommissionDraft(v)
                         }}
                         onBlur={() => {
@@ -1147,7 +1153,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                 {!commissionEditing ? (
                   <>
                     <span className="text-sm font-medium">
-                      {commissionRate}%
+                      {formatCommissionPercent(commissionRate)}%
                     </span>
 
                     <AppButton
@@ -1165,11 +1171,12 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
                       type="number"
                       min={0}
                       max={100}
+                      step={0.1}
+                      inputMode="decimal"
                       value={commissionRate ?? 0}
                       onChange={(e) => {
-                        const v = Number(e.target.value)
-                        if (Number.isNaN(v)) return
-                        if (v < 0 || v > 100) return
+                        const v = parseCommissionPercentInput(e.target.value)
+                        if (v == null) return
                         setCommissionRate(v)
                       }}
                       className="h-8 w-20 rounded-md border px-2 text-sm"

@@ -5,6 +5,7 @@ import { AppButton } from "@/components/app/AppButton"
 import { AppInput } from "@/components/app/AppInput"
 import { AppSelect } from "@/components/app/AppSelect"
 import { AppBadge } from "@/components/app/AppBadge"
+import { Switch } from "@/components/ui/switch"
 
 import {
   Dialog,
@@ -15,6 +16,11 @@ import {
 } from "@/components/ui/dialog"
 
 import { Trash2, X } from "lucide-react"
+import {
+  formatCommissionPercent,
+  isEditableCommissionPercentInput,
+  parseCommissionPercentInput,
+} from "@/lib/commissionRate"
 
 function toNumOrNull(v: string) {
   const t = (v ?? "").trim()
@@ -22,6 +28,28 @@ function toNumOrNull(v: string) {
   const n = Number(t)
   if (!Number.isFinite(n)) return null
   return Math.max(0, Math.round(n))
+}
+
+function toNonNegativeNumberOrZero(v: string) {
+  const t = (v ?? "").trim()
+  if (!t) return 0
+  const n = Number(t)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.round(n))
+}
+
+function isEditableIntegerInput(v: string) {
+  return /^\d*$/.test(v)
+}
+
+function toCommissionRateOrNull(v: string) {
+  const t = (v ?? "").trim()
+  if (!t) return null
+  return parseCommissionPercentInput(t)
+}
+
+function getMonthlyStoreFee(s?: Store | null) {
+  return Math.max(0, Number(s?.storeFee ?? s?.monthlyRentFee ?? 0) || 0)
 }
 
 function statusLabel(v?: Store["status"] | null) {
@@ -43,6 +71,7 @@ type StoreUpsertInput = {
   channel: "online" | "offline"
   tags: string[]
   storeFee: number | null
+  includeMonthlyRentInMargin: boolean
   settlementCycle: "monthly" | "weekly" | "biweekly" | "ad-hoc" | null
   settlementDay: number | null
   settlementNote: string | null
@@ -89,6 +118,7 @@ export function StoreDetailDialog(props: {
   const [tagInput, setTagInput] = useState("")
 
   const [storeFee, setStoreFee] = useState("")
+  const [includeMonthlyRentInMargin, setIncludeMonthlyRentInMargin] = useState(true)
   const [settlementCycle, setSettlementCycle] = useState<
     "monthly" | "weekly" | "biweekly" | "ad-hoc" | ""
   >("")
@@ -133,6 +163,7 @@ export function StoreDetailDialog(props: {
     setTagInput("")
 
     setStoreFee("")
+    setIncludeMonthlyRentInMargin(true)
     setSettlementCycle("")
     setSettlementDay("")
     setSettlementNote("")
@@ -142,7 +173,7 @@ export function StoreDetailDialog(props: {
     setIsEditing(false)
 
     setName(s.name ?? "")
-    setCommission(s.commissionRate == null ? "" : String(s.commissionRate))
+    setCommission(s.commissionRate == null ? "" : formatCommissionPercent(s.commissionRate))
     setTargetQty(s.targetQtyOverride == null ? "" : String(s.targetQtyOverride))
     setContactName(s.contactName ?? "")
     setPhone(s.phone ?? "")
@@ -155,7 +186,8 @@ export function StoreDetailDialog(props: {
     setTags(((s.tags ?? []) as any[]).map((t) => String(t ?? "").trim()).filter(Boolean))
     setTagInput("")
 
-    setStoreFee(s.storeFee == null ? "" : String(s.storeFee))
+    setStoreFee(String(getMonthlyStoreFee(s)))
+    setIncludeMonthlyRentInMargin(s.includeMonthlyRentInMargin ?? true)
     setSettlementCycle((s.settlementCycle as any) ?? "")
     setSettlementDay(s.settlementDay == null ? "" : String(s.settlementDay))
     setSettlementNote(s.settlementNote ?? "")
@@ -185,9 +217,9 @@ export function StoreDetailDialog(props: {
   }
 
   const buildInput = (): StoreUpsertInput => {
-    const commissionRate = toNumOrNull(commission)
+    const commissionRate = toCommissionRateOrNull(commission)
     const targetQtyOverride = toNumOrNull(targetQty)
-    const storeFeeNum = toNumOrNull(storeFee)
+    const storeFeeNum = toNonNegativeNumberOrZero(storeFee)
 
     const sd = toNumOrNull(settlementDay)
     const safeSettlementDay = sd == null ? null : sd >= 1 && sd <= 31 ? sd : null
@@ -206,6 +238,7 @@ export function StoreDetailDialog(props: {
       tags,
 
       storeFee: storeFeeNum,
+      includeMonthlyRentInMargin,
       settlementCycle: settlementCycle === "" ? null : settlementCycle,
       settlementDay: safeSettlementDay,
       settlementNote: settlementNote.trim() || null,
@@ -259,7 +292,7 @@ export function StoreDetailDialog(props: {
           </div>
           </DialogHeader>
 
-<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-0">
+<div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3 sm:px-0">
   {/* create는 항상 편집 UI */}
   {!store && !isCreate ? (
           <div className="py-6 text-sm text-muted-foreground">선택된 입점처가 없습니다.</div>
@@ -288,11 +321,14 @@ export function StoreDetailDialog(props: {
 
                 <div className="text-sm text-muted-foreground">수수료</div>
                 <div className="text-sm">
-                  {store?.commissionRate == null ? "-" : `${store.commissionRate}%`}
+                  {store?.commissionRate == null ? "-" : `${formatCommissionPercent(store.commissionRate)}%`}
                 </div>
 
-                <div className="text-sm text-muted-foreground">입점료</div>
-                <div className="text-sm">{store?.storeFee == null ? "-" : `${store.storeFee}`}</div>
+                <div className="text-sm text-muted-foreground">월 입점비</div>
+                <div className="text-sm">
+                  {`${getMonthlyStoreFee(store).toLocaleString("ko-KR")}원`}
+                  {store?.includeMonthlyRentInMargin === false ? " (계산 제외)" : ""}
+                </div>
 
                 <div className="text-sm text-muted-foreground">태그</div>
                 <div className="text-sm break-words">
@@ -344,8 +380,9 @@ export function StoreDetailDialog(props: {
 
             <div className="rounded-xl border p-4 space-y-3">
               <div className="text-sm font-semibold">계약/운영</div>
-              <div className="grid gap-2 sm:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <AppSelect
+                  className="w-full min-w-0 [&_select]:min-w-0"
                   value={status}
                   onValueChange={(v) => setStatus(v as any)}
                   placeholder="상태"
@@ -355,6 +392,7 @@ export function StoreDetailDialog(props: {
                   ]}
                 />
                 <AppSelect
+                  className="w-full min-w-0 [&_select]:min-w-0"
                   value={channel}
                   onValueChange={(v) => setChannel(v as any)}
                   placeholder="온/오프라인"
@@ -363,12 +401,41 @@ export function StoreDetailDialog(props: {
                     { value: "online", label: "온라인" },
                   ]}
                 />
-                <AppInput value={commission} onChange={(e) => setCommission(e.target.value)} placeholder="수수료(%)" inputMode="decimal" />
-                <AppInput value={storeFee} onChange={(e) => setStoreFee(e.target.value)} placeholder="입점료(선택)" inputMode="numeric" />
-              </div>
+                <AppInput
+                  className="w-full min-w-0"
+                  value={commission}
+                  onChange={(e) => {
+                    if (isEditableCommissionPercentInput(e.target.value)) {
+                      setCommission(e.target.value)
+                    }
+                  }}
+                  placeholder="수수료(%)"
+                  inputMode="decimal"
+                />
+                <AppInput
+                  className="w-full min-w-0"
+                  value={storeFee}
+                  onChange={(e) => {
+                    if (isEditableIntegerInput(e.target.value)) setStoreFee(e.target.value)
+                  }}
+                  placeholder="월 입점비 (원)"
+                  inputMode="numeric"
+                />
 
-              {/* 태그 칩 */}
-              <div className="space-y-2">
+                <label className="flex w-full min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm sm:col-span-2">
+                  <span className="min-w-0 whitespace-nowrap">마진 계산에 포함</span>
+                  <Switch
+                    checked={includeMonthlyRentInMargin}
+                    onCheckedChange={setIncludeMonthlyRentInMargin}
+                  />
+                </label>
+
+                <div className="min-w-0 text-xs leading-5 text-muted-foreground sm:col-span-2">
+                  3개월에 90,000원을 선납했다면 월 입점비는 30,000원으로 입력하세요.
+                </div>
+
+                {/* 태그 칩 */}
+                <div className="min-w-0 space-y-2 sm:col-span-2">
                 <div className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-background px-2 py-2">
                   {tags.length === 0 ? (
                     <span className="text-xs text-muted-foreground px-1">태그 없음</span>
@@ -413,10 +480,11 @@ export function StoreDetailDialog(props: {
                       }
                     }}
                     placeholder="태그 입력 후 Enter (또는 콤마)"
-                    className="min-w-[180px] flex-1 bg-transparent px-1 text-sm outline-none"
+                    className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none"
                   />
                 </div>
                 <div className="text-xs text-muted-foreground">Enter로 추가, X로 삭제. 최대 20개.</div>
+                </div>
               </div>
             </div>
 
