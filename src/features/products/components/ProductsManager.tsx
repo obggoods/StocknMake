@@ -292,6 +292,7 @@ export default function ProductsManager() {
           price: p.price ?? 0,
           sku: p.sku ?? null,
           barcode: p.barcode ?? null,
+          headquartersStockQty: p.headquartersStockQty ?? p.headquarters_stock_qty ?? 0,
         })),
       })
 

@@ -3,7 +3,11 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 
 import PageHeader from "@/app/layout/PageHeader"
 import { useAppData } from "@/features/core/useAppData"
-import { upsertInventoryItemDB, upsertInventoryItemsBatchDB } from "@/data/store.supabase"
+import {
+  updateProductHeadquartersStockQtyDB,
+  upsertInventoryItemDB,
+  upsertInventoryItemsBatchDB,
+} from "@/data/store.supabase"
 
 import { AppButton } from "@/components/app/AppButton"
 import { AppCard } from "@/components/app/AppCard"
@@ -229,6 +233,16 @@ type InventoryUploadSkippedRow = {
   reason: string
 }
 
+const HEADQUARTERS_ITEMS_PER_PAGE = 20
+
+type HeadquartersSort =
+  | "name-asc"
+  | "name-desc"
+  | "headquarters-desc"
+  | "headquarters-asc"
+  | "total-desc"
+  | "total-asc"
+
 export default function InventoryPage() {
   const nav = useNavigate()
   const [sp, setSp] = useSearchParams()
@@ -253,9 +267,12 @@ export default function InventoryPage() {
   // ✅ 탭: querystring으로 초기화 (dashboard 버튼에서 바로 열기)
   const initialTab = (sp.get("tab") ?? "inventory") as "inventory" | "make"
   const [tab, setTab] = useState<"inventory" | "make">(initialTab === "make" ? "make" : "inventory")
+  const initialStockScope = sp.get("tab") === "headquarters" ? "headquarters" : "store"
+  const [stockScope, setStockScope] = useState<"store" | "headquarters">(initialStockScope)
 
   useEffect(() => {
     const q = sp.get("tab")
+    if (q === "headquarters") setStockScope("headquarters")
     if (q === "make") setTab("make")
     if (q === "inventory") setTab("inventory")
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -268,6 +285,8 @@ export default function InventoryPage() {
   const [searchTerm, setSearchTerm] = useState("")
 
   const [makeViewMode, setMakeViewMode] = useState<"store" | "total">("store")
+  const [headquartersSort, setHeadquartersSort] = useState<HeadquartersSort>("name-asc")
+  const [headquartersPage, setHeadquartersPage] = useState(1)
   const [csvUploading, setCsvUploading] = useState(false)
   const csvInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -623,8 +642,103 @@ const storeById = useMemo(
     return makeRowsTotal.reduce((acc, row) => acc + row.need, 0)
   }, [makeRowsTotal])
 
+  const storeStockTotalByProductId = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const it of inventory) {
+      const pid = String(it.productId)
+      m.set(pid, (m.get(pid) ?? 0) + num(it.onHandQty, 0))
+    }
+    return m
+  }, [inventory])
+
+  const headquartersStockRows = useMemo(() => {
+    const rows = products.map((p: any) => {
+      const productId = String(p.id)
+      const headquartersQty = num(p.headquartersStockQty ?? p.headquarters_stock_qty, 0)
+      const storeQty = storeStockTotalByProductId.get(productId) ?? 0
+
+      return {
+        productId,
+        name: String(p.name ?? ""),
+        category: String(p.category ?? "").trim(),
+        headquartersQty,
+        storeQty,
+        totalQty: headquartersQty + storeQty,
+      }
+    })
+
+    const filtered = rows
+      .filter((row) => {
+        if (categoryFilter !== "__all__" && row.category !== categoryFilter) return false
+        if (!normalizedSearchTerm) return true
+        return (
+          row.name.toLowerCase().includes(normalizedSearchTerm) ||
+          row.category.toLowerCase().includes(normalizedSearchTerm)
+        )
+      })
+
+    return filtered.sort((a, b) => {
+      const nameCompare = a.name.localeCompare(b.name, "ko")
+
+      if (headquartersSort === "name-desc") return b.name.localeCompare(a.name, "ko")
+      if (headquartersSort === "headquarters-desc") {
+        if (b.headquartersQty !== a.headquartersQty) return b.headquartersQty - a.headquartersQty
+        return nameCompare
+      }
+      if (headquartersSort === "headquarters-asc") {
+        if (a.headquartersQty !== b.headquartersQty) return a.headquartersQty - b.headquartersQty
+        return nameCompare
+      }
+      if (headquartersSort === "total-desc") {
+        if (b.totalQty !== a.totalQty) return b.totalQty - a.totalQty
+        return nameCompare
+      }
+      if (headquartersSort === "total-asc") {
+        if (a.totalQty !== b.totalQty) return a.totalQty - b.totalQty
+        return nameCompare
+      }
+
+      return nameCompare
+      })
+  }, [products, storeStockTotalByProductId, categoryFilter, normalizedSearchTerm, headquartersSort])
+
+  const headquartersTotalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(headquartersStockRows.length / HEADQUARTERS_ITEMS_PER_PAGE))
+  }, [headquartersStockRows.length])
+
+  const safeHeadquartersPage = Math.min(headquartersPage, headquartersTotalPages)
+
+  const pagedHeadquartersStockRows = useMemo(() => {
+    const start = (safeHeadquartersPage - 1) * HEADQUARTERS_ITEMS_PER_PAGE
+    return headquartersStockRows.slice(start, start + HEADQUARTERS_ITEMS_PER_PAGE)
+  }, [headquartersStockRows, safeHeadquartersPage])
+
+  useEffect(() => {
+    setHeadquartersPage(1)
+  }, [categoryFilter, normalizedSearchTerm, headquartersSort])
+
+  useEffect(() => {
+    if (safeHeadquartersPage !== headquartersPage) {
+      setHeadquartersPage(safeHeadquartersPage)
+    }
+  }, [safeHeadquartersPage, headquartersPage])
+
+  const totalHeadquartersStock = useMemo(() => {
+    return products.reduce(
+      (acc: number, p: any) => acc + num(p.headquartersStockQty ?? p.headquarters_stock_qty, 0),
+      0
+    )
+  }, [products])
+
+  const totalStoreStock = useMemo(() => {
+    return inventory.reduce((acc: number, it: any) => acc + num(it.onHandQty, 0), 0)
+  }, [inventory])
+
+  const totalCombinedStock = totalHeadquartersStock + totalStoreStock
+
   // ===== 입력 저장 (Optimistic + debounce) =====
   const qtyInputRefs = useRef<Array<HTMLInputElement | null>>([])
+  const headquartersQtyInputRefs = useRef<Array<HTMLInputElement | null>>([])
   const saveTimersRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
@@ -672,9 +786,51 @@ const storeById = useMemo(
     [a]
   )
 
+  const setHeadquartersQtyLocal = useCallback(
+    (productId: string, nextQty: number) => {
+      a.setData((prev) => ({
+        ...prev,
+        products: (prev.products ?? []).map((p: any) =>
+          String(p.id) === productId ? { ...p, headquartersStockQty: nextQty } : p
+        ),
+        updatedAt: Date.now(),
+      }))
+    },
+    [a]
+  )
+
+  const scheduleSaveHeadquartersQty = useCallback(
+    (productId: string, nextQty: number) => {
+      const key = `headquarters__${productId}`
+
+      const prevTimer = saveTimersRef.current[key]
+      if (prevTimer) window.clearTimeout(prevTimer)
+
+      saveTimersRef.current[key] = window.setTimeout(async () => {
+        try {
+          await updateProductHeadquartersStockQtyDB({
+            productId,
+            headquartersStockQty: nextQty,
+          })
+        } catch (e) {
+          console.error(e)
+          toast.error("본사 보유 재고 저장에 실패했어요.")
+          await a.refresh()
+        }
+      }, 500)
+    },
+    [a]
+  )
+
   const moveFocus = useCallback((fromIndex: number, dir: -1 | 1) => {
     const next = fromIndex + dir
     const el = qtyInputRefs.current[next]
+    if (el) el.focus()
+  }, [])
+
+  const moveHeadquartersFocus = useCallback((fromIndex: number, dir: -1 | 1) => {
+    const next = fromIndex + dir
+    const el = headquartersQtyInputRefs.current[next]
     if (el) el.focus()
   }, [])
 
@@ -1156,6 +1312,26 @@ if (mappedRows.length < 1) {
         description="입점처별 재고 현황과 제작 필요 수량을 한 번에 관리합니다."
       />
 
+      <Tabs
+        value={stockScope}
+        onValueChange={(v) => {
+          const next = v as "store" | "headquarters"
+          setStockScope(next)
+          setSp((prev) => {
+            const n = new URLSearchParams(prev)
+            n.set("tab", next === "headquarters" ? "headquarters" : tab)
+            return n
+          })
+        }}
+        className="w-full"
+      >
+        <TabsList className="w-full justify-start">
+          <TabsTrigger value="store">입점처별 재고</TabsTrigger>
+          <TabsTrigger value="headquarters">본사 보유 재고</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="store" className="mt-4 space-y-6">
+
             {/* 상단 컨트롤 */}
       <div className="space-y-3 rounded-xl border bg-card p-4">
         {/* 1행: 필터 */}
@@ -1479,6 +1655,198 @@ if (mappedRows.length < 1) {
           </Tabs>
         </div>
       </AppCard>
+
+        </TabsContent>
+
+        <TabsContent value="headquarters" className="mt-4 space-y-6">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <AppCard className="shadow-sm">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">본사 보유 재고</p>
+                <p className="text-3xl font-semibold tabular-nums">{totalHeadquartersStock}</p>
+              </div>
+            </AppCard>
+
+            <AppCard className="shadow-sm">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">입점처 재고 합계</p>
+                <p className="text-3xl font-semibold tabular-nums">{totalStoreStock}</p>
+              </div>
+            </AppCard>
+
+            <AppCard className="shadow-sm">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">전체 재고</p>
+                <p className="text-3xl font-semibold tabular-nums">{totalCombinedStock}</p>
+              </div>
+            </AppCard>
+          </div>
+
+          <div className="space-y-3 rounded-xl border bg-card p-4">
+            <div className="grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_220px]">
+              <AppSelect
+                value={categoryFilter}
+                onValueChange={(v: string) => setCategoryFilter(v)}
+                options={[
+                  { label: "전체 카테고리", value: "__all__" },
+                  ...categoryOptions.map((c) => ({ label: c, value: c })),
+                ]}
+              />
+
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="제품명 또는 카테고리 검색"
+                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+              />
+
+              <AppSelect
+                value={headquartersSort}
+                onValueChange={(v: string) => setHeadquartersSort(v as HeadquartersSort)}
+                options={[
+                  { label: "제품명 오름차순", value: "name-asc" },
+                  { label: "제품명 내림차순", value: "name-desc" },
+                  { label: "본사 재고 많은순", value: "headquarters-desc" },
+                  { label: "본사 재고 적은순", value: "headquarters-asc" },
+                  { label: "전체 재고 많은순", value: "total-desc" },
+                  { label: "전체 재고 적은순", value: "total-asc" },
+                ]}
+              />
+            </div>
+          </div>
+
+          <AppCard className="shadow-sm">
+            <div className="mb-3 flex flex-col gap-1">
+              <p className="text-sm font-medium">본사 보유 재고</p>
+              <p className="text-xs text-muted-foreground">
+                본사 재고는 입점처 재고, 제작 필요량, 정산 차감과 별도로 관리됩니다.
+                수량을 변경하면 자동 저장됩니다.
+              </p>
+            </div>
+
+            <div className="overflow-hidden rounded-lg border">
+              <Table className="w-full text-sm">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[34%]">제품명</TableHead>
+                    <TableHead className="w-[22%] text-right">본사 보유 재고</TableHead>
+                    <TableHead className="w-[22%] text-right">입점처 재고 합계</TableHead>
+                    <TableHead className="w-[22%] text-right">전체 재고</TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {headquartersStockRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="py-10">
+                        <EmptyState title="표시할 제품이 없습니다." description="필터나 검색어를 확인해 주세요." />
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    pagedHeadquartersStockRows.map((row, rowIndex) => (
+                      <TableRow key={row.productId} className="hover:bg-accent/30">
+                        <TableCell>
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{row.name || "-"}</div>
+                            <div className="mt-0.5 text-xs text-muted-foreground">
+                              {row.category || "미분류"}
+                            </div>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="text-right">
+                          <input
+                            ref={(el) => {
+                              headquartersQtyInputRefs.current[rowIndex] = el
+                            }}
+                            type="number"
+                            inputMode="numeric"
+                            className="h-9 w-[104px] rounded-md border bg-background px-2 text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-ring"
+                            value={row.headquartersQty}
+                            onChange={(e) => {
+                              const v = Number(e.target.value)
+                              const nextQty = Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0
+                              setHeadquartersQtyLocal(row.productId, nextQty)
+                              scheduleSaveHeadquartersQty(row.productId, nextQty)
+                            }}
+                            onBlur={(e) => {
+                              const v = Number((e.target as HTMLInputElement).value)
+                              const nextQty = Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0
+                              setHeadquartersQtyLocal(row.productId, nextQty)
+                              scheduleSaveHeadquartersQty(row.productId, nextQty)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === "ArrowDown") {
+                                e.preventDefault()
+                                moveHeadquartersFocus(rowIndex, 1)
+                              }
+                              if (e.key === "ArrowUp") {
+                                e.preventDefault()
+                                moveHeadquartersFocus(rowIndex, -1)
+                              }
+                            }}
+                            onFocus={(e) => {
+                              ;(e.target as HTMLInputElement).select()
+                            }}
+                          />
+                        </TableCell>
+
+                        <TableCell className="text-right tabular-nums">{row.storeQty}</TableCell>
+                        <TableCell className="text-right tabular-nums font-semibold">{row.totalQty}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+
+            {headquartersTotalPages > 1 ? (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                <AppButton
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={safeHeadquartersPage <= 1}
+                  onClick={() => setHeadquartersPage(1)}
+                  className="min-w-[64px]"
+                >
+                  처음
+                </AppButton>
+
+                {Array.from({ length: headquartersTotalPages }).map((_, idx) => {
+                  const page = idx + 1
+                  const active = page === safeHeadquartersPage
+
+                  return (
+                    <AppButton
+                      key={page}
+                      type="button"
+                      size="sm"
+                      variant={active ? "default" : "secondary"}
+                      onClick={() => setHeadquartersPage(page)}
+                      className="min-w-9 px-3"
+                    >
+                      {page}
+                    </AppButton>
+                  )
+                })}
+
+                <AppButton
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={safeHeadquartersPage >= headquartersTotalPages}
+                  onClick={() => setHeadquartersPage(headquartersTotalPages)}
+                  className="min-w-[64px]"
+                >
+                  마지막
+                </AppButton>
+              </div>
+            ) : null}
+          </AppCard>
+        </TabsContent>
+      </Tabs>
 
       <div className="flex justify-end">
         <AppButton variant="secondary" onClick={() => nav("/dashboard")}>

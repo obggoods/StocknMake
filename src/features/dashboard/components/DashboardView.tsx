@@ -46,6 +46,19 @@ function DashboardViewInner() {
 
   const storeCount = useMemo(() => stores.length, [stores])
 
+  const totalHeadquartersStock = useMemo(() => {
+    return products.reduce(
+      (acc: number, p: any) => acc + n(p.headquartersStockQty ?? p.headquarters_stock_qty),
+      0
+    )
+  }, [products])
+
+  const totalStoreStock = useMemo(() => {
+    return inventory.reduce((acc: number, it: any) => acc + n(it.onHandQty), 0)
+  }, [inventory])
+
+  const totalStock = totalHeadquartersStock + totalStoreStock
+
   // 저재고 기준은 profile의 lowStockThresholdInput 사용
   const lowStockThreshold = useMemo(() => {
     const v = Number.parseInt(String(a.lowStockThresholdInput ?? "2").trim(), 10)
@@ -154,7 +167,7 @@ function DashboardViewInner() {
   return (
     <div className="space-y-4">
       {/* KPI */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <AppCard className="shadow-sm">
           <div className="space-y-1">
             <p className="text-sm text-muted-foreground">총 SKU</p>
@@ -168,6 +181,16 @@ function DashboardViewInner() {
             <p className="text-sm text-muted-foreground">입점처 수</p>
             <p className="text-3xl font-semibold tabular-nums">{storeCount}</p>
             <p className="text-xs text-muted-foreground">등록된 채널</p>
+          </div>
+        </AppCard>
+
+        <AppCard className="shadow-sm">
+          <div className="space-y-1">
+            <p className="text-sm text-muted-foreground">전체 재고</p>
+            <p className="text-3xl font-semibold tabular-nums">{totalStock}</p>
+            <p className="text-xs text-muted-foreground">
+              본사 {totalHeadquartersStock} + 입점처 {totalStoreStock}
+            </p>
           </div>
         </AppCard>
 

@@ -13,6 +13,7 @@ export type Product = {
   price?: number | null;
   sku?: string | null;
   barcode?: string | null;
+  headquartersStockQty?: number | null;
 };
 
 export type Store = {
