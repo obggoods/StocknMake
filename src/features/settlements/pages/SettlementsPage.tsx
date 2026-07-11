@@ -66,6 +66,11 @@ function fmtKRW(v: number) {
   return new Intl.NumberFormat("ko-KR").format(Math.round(v))
 }
 
+function normalizeMonthlyRentFee(store: { storeFee?: unknown; monthlyRentFee?: unknown } | null | undefined) {
+  const value = Number(store?.storeFee ?? store?.monthlyRentFee ?? 0)
+  return Number.isFinite(value) ? Math.max(0, value) : 0
+}
+
 export default function SettlementsPage() {
   const a = useAppData()
 
@@ -195,9 +200,7 @@ export default function SettlementsPage() {
       (s: any) => String(s.id) === String(detail.settlement?.marketplace_id)
     )
     const includeRent = store?.includeMonthlyRentInMargin ?? true
-    const totalRentFee = includeRent
-      ? Math.max(0, Number(store?.storeFee ?? store?.monthlyRentFee ?? 0) || 0)
-      : 0
+    const totalRentFee = includeRent ? normalizeMonthlyRentFee(store) : 0
     totalProfit -= totalRentFee
 
     return {

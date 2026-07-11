@@ -8,9 +8,6 @@ type StoreRow = {
     id: string
     name: string
     commission_rate?: number | null
-    store_fee?: number | null
-    monthly_rent_fee?: number | null
-    include_monthly_rent_in_margin?: boolean | null
 }
 
 type ProductProfile = {
@@ -173,11 +170,7 @@ export default function CostSimulationCard(props: {
     const cogs = selectedProfile ? calcCOGS(selectedProfile) : 0
     const commission = sellingPrice * (appliedCommissionRate / 100)
     const vat = sellingPrice * (vatRate / 100)
-    const monthlyRentFee =
-        selectedStore?.include_monthly_rent_in_margin === false
-            ? 0
-            : Math.max(0, Number(selectedStore?.store_fee ?? selectedStore?.monthly_rent_fee ?? 0) || 0)
-    const profit = sellingPrice - cogs - commission - vat - monthlyRentFee
+    const profit = sellingPrice - cogs - commission - vat
     const marginRate = sellingPrice > 0 ? (profit / sellingPrice) * 100 : 0
     const assessment = assessMargin(marginRate)
     const priceChanged = Boolean(selectedProfile) && Math.round(sellingPrice) !== Math.round(originalSellingPrice)
@@ -313,15 +306,6 @@ export default function CostSimulationCard(props: {
                         <div className="rounded-lg border p-3">
                             <div className="text-xs text-muted-foreground">VAT</div>
                             <div className="mt-1 font-medium">{formatCurrency(vat)}</div>
-                        </div>
-
-                        <div className="rounded-lg border p-3">
-                            <div className="text-xs text-muted-foreground">월 입점비</div>
-                            <div className="mt-1 font-medium">
-                                {selectedStore?.include_monthly_rent_in_margin === false
-                                    ? "(계산 제외)"
-                                    : formatCurrency(monthlyRentFee)}
-                            </div>
                         </div>
 
                         <div className="rounded-lg border p-3">

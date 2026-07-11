@@ -41,6 +41,17 @@ export function getAnalysisMonths(range: AnalysisRange, now = new Date()) {
   return Array.from({ length: count }, (_, index) => addMonths(current, index - count + 1))
 }
 
+export function getPreviousAnalysisMonths(range: AnalysisRange, months: string[]) {
+  if (months.length === 0) return []
+
+  if (range === "year") {
+    return months.map((month) => addMonths(month, -12))
+  }
+
+  const count = range === "6m" ? 6 : 3
+  return months.map((month) => addMonths(month, -count))
+}
+
 function getProductName(product: Product | undefined, fallback: string) {
   const name = String(product?.name ?? fallback ?? "").trim()
   return name || "상품명 없음"
@@ -60,6 +71,11 @@ function normalizeCommissionRate(rate: number | null | undefined) {
   const value = Number(rate ?? 0)
   if (!Number.isFinite(value) || value <= 0) return 0
   return value <= 1 ? value : value / 100
+}
+
+function normalizeMonthlyRentFee(store: Store | undefined) {
+  const value = Number(store?.storeFee ?? store?.monthlyRentFee ?? 0)
+  return Number.isFinite(value) ? Math.max(0, value) : 0
 }
 
 function getProductCost(input: {
@@ -227,7 +243,7 @@ export function buildSalesAnalysis(input: {
           totalQty: 0,
           totalAmount: 0,
           commissionRate: normalizeCommissionRate(store?.commissionRate),
-          monthlyRentFee: Math.max(0, Number(store?.storeFee ?? store?.monthlyRentFee ?? 0) || 0),
+          monthlyRentFee: normalizeMonthlyRentFee(store),
           includeMonthlyRentInMargin: store?.includeMonthlyRentInMargin ?? true,
           monthly: new Map<string, { qty: number; amount: number; cost: number }>(),
           products: new Map(),
