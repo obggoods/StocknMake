@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react"
 import { supabase } from "@/lib/supabaseClient"
 import PageHeader from "@/app/layout/PageHeader"
 import SettlementUploader from "@/features/settlements/components/SettlementUploader"
+import { ManualSettlementDialog } from "@/features/settlements/components/ManualSettlementDialog"
 import MarginCalculatorPage from "@/features/margin/pages/MarginCalculatorPage"
 import MarketplacePerformance from "@/features/dashboard/components/MarketplacePerformance"
 import { AppCard } from "@/components/app/AppCard"
@@ -101,6 +102,7 @@ export default function SettlementsPage() {
   const [costPickerOpen, setCostPickerOpen] = useState(false)
   const [targetLine, setTargetLine] = useState<any | null>(null)
   const [createProfileOpen, setCreateProfileOpen] = useState(false)
+  const [manualSettlementOpen, setManualSettlementOpen] = useState(false)
   const stores = (a.data.stores ?? []) as any[]
 
   const storeNameById = useMemo(() => {
@@ -448,7 +450,15 @@ export default function SettlementsPage() {
       </div>
 
       {/* 업로드 */}
-      <SettlementUploader onSaved={handleSettlementSaved} />
+      <SettlementUploader onSaved={handleSettlementSaved} onManualSettlement={() => setManualSettlementOpen(true)} />
+      <ManualSettlementDialog
+        open={manualSettlementOpen}
+        onOpenChange={setManualSettlementOpen}
+        stores={stores}
+        products={(a.data.products ?? []) as Array<{ id: string; name: string; category?: string | null; price?: number | null; sku?: string | null; barcode?: string | null; active?: boolean }>}
+        inventory={(a.data.inventory ?? []) as Array<{ storeId: string; productId: string }>}
+        onSaved={handleSettlementSaved}
+      />
 
       {/* 저장된 정산(v2) 조회 */}
       <AppCard
@@ -502,7 +512,7 @@ export default function SettlementsPage() {
               ))}
             </select>
 
-            <AppButton type="button" variant="outline" onClick={load} disabled={loading}>
+            <AppButton type="button" variant="outline" onClick={handleSettlementSaved} disabled={loading}>
               새로고침
             </AppButton>
           </div>

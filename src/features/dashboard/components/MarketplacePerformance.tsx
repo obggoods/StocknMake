@@ -134,7 +134,7 @@ export default function MarketplacePerformance(props: MarketplacePerformanceProp
     const focusMid = focusMarketplaceId ? String(focusMarketplaceId) : null
 
     for (const s of settlements) {
-      const gross = n((s as any).net_amount ?? (s as any).net_settlement_amount ?? 0)
+      const gross = n((s as any).gross_amount ?? 0)
       const period = String((s as any).period_month ?? (s as any).month ?? "")
       const mid = String((s as any).marketplace_id ?? "")
 
@@ -249,7 +249,7 @@ export default function MarketplacePerformance(props: MarketplacePerformanceProp
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <div>
               <span className="text-muted-foreground">
-                {focusMonth ? "정산금 합계" : "최근 30일 정산금액"}
+                {focusMonth ? "총매출 합계" : "최근 30일 총매출"}
               </span>
               <span className="ml-2 font-medium">{fmtKRW(total)}원</span>
             </div>

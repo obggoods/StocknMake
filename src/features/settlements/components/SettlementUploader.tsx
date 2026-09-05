@@ -88,6 +88,7 @@ type ColumnMapping = {
 
 type SettlementUploaderProps = {
   onSaved?: () => void | Promise<void>
+  onManualSettlement?: () => void
 }
 
 function parseIntSafe(v: string): number {
@@ -104,6 +105,13 @@ function parseMoneySafe(v: string): number {
   const n = Number(t.replace(/,/g, "").replace(/₩/g, ""))
   if (!Number.isFinite(n)) return 0
   return Math.max(0, Math.round(n))
+}
+
+function previousMonthValue() {
+  const date = new Date()
+  date.setDate(1)
+  date.setMonth(date.getMonth() - 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
 }
 
 type UploadedSheetRow = Record<string, string>
@@ -337,7 +345,7 @@ function SelectField(props: {
   )
 }
 
-export default function SettlementUploader({ onSaved }: SettlementUploaderProps) {
+export default function SettlementUploader({ onSaved, onManualSettlement }: SettlementUploaderProps) {
   const a = useAppData()
   const products = a.data.products ?? []
 
@@ -351,12 +359,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   const [commissionEditing, setCommissionEditing] = useState(false)
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [summaryStoreId, setSummaryStoreId] = useState("")
-  const [summaryMonth, setSummaryMonth] = useState(() => {
-    const d = new Date()
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, "0")
-    return `${y}-${m}`
-  })
+  const [summaryMonth, setSummaryMonth] = useState(previousMonthValue)
   const [summaryGrossAmount, setSummaryGrossAmount] = useState("")
   // ✅ 매핑 UI용 상태
   const [sheetRows, setSheetRows] = useState<UploadedSheetRow[]>([])
@@ -371,10 +374,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   const [autoCreateLoading, setAutoCreateLoading] = useState(false)
   const [selectedStoreId, setSelectedStoreId] = useState<string>("")
 
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
-    const now = new Date()
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
-  })
+  const [selectedMonth, setSelectedMonth] = useState<string>(previousMonthValue)
 
   const hasExistingSettlementForSelectedMonth = useMemo(() => {
     if (!selectedStoreId || !selectedMonth) return false
@@ -951,14 +951,14 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
         title="새 정산 추가"
         description="엑셀 업로드 → 입점처/월 선택 → 컬럼 매핑(바코드/수량/금액) → 미리보기 → v2 정산 저장"
         action={
-          <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3">
+          <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-4">
 <AppButton
   type="button"
   variant="outline"
   onClick={templateDownload}
   className="w-full"
 >
-  엑셀 템플릿 다운로드
+  엑셀 템플릿
 </AppButton>
 
 <AppButton
@@ -978,7 +978,17 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   disabled={a.loading || busy}
   className="w-full"
 >
-  판매총액만 입력
+  판매총액 입력
+</AppButton>
+
+<AppButton
+  type="button"
+  variant="outline"
+  onClick={onManualSettlement}
+  disabled={a.loading || busy}
+  className="w-full whitespace-nowrap"
+>
+  직접 정산 등록
 </AppButton>
 
             <input
@@ -1020,7 +1030,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
 
                 <label className="grid gap-1">
                   <span className="text-xs text-muted-foreground">
-                    월(YYYY.MM) <span className="text-destructive"> *</span>
+                    정산 대상 월(YYYY.MM) <span className="text-destructive"> *</span>
                   </span>
                   <AppSelect
   value={summaryMonth}
@@ -1029,7 +1039,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   className="h-9"
   options={Array.from({ length: 24 }).map((_, i) => {
     const d = new Date()
-    d.setMonth(d.getMonth() - i)
+    d.setMonth(d.getMonth() - i - 1)
     const y = d.getFullYear()
     const m = String(d.getMonth() + 1).padStart(2, "0")
     const value = `${y}-${m}`
@@ -1212,7 +1222,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
 
                 <label className="grid gap-1">
                   <span className="text-xs text-muted-foreground">
-                    월(YYYY.MM) <span className="text-destructive"> *</span>
+                    정산 대상 월(YYYY.MM) <span className="text-destructive"> *</span>
                   </span>
                   <AppSelect
   value={selectedMonth}
@@ -1221,7 +1231,7 @@ export default function SettlementUploader({ onSaved }: SettlementUploaderProps)
   className="h-9"
   options={Array.from({ length: 24 }).map((_, i) => {
     const d = new Date()
-    d.setMonth(d.getMonth() - i)
+    d.setMonth(d.getMonth() - i - 1)
     const y = d.getFullYear()
     const m = String(d.getMonth() + 1).padStart(2, "0")
     const value = `${y}-${m}`

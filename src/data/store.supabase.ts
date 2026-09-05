@@ -1472,6 +1472,90 @@ export async function createSettlementHeaderDB(input: {
   if (error) throw error
   return data
 }
+
+export async function createManualSettlementDB(input: {
+  marketplaceId: string
+  periodMonth: string
+  items: Array<{ productId: string; quantity: number }>
+}) {
+  const userId = await requireUserId()
+  const month = String(input.periodMonth ?? "")
+  const items = input.items.filter(
+    (item) =>
+      Number.isInteger(item.quantity) &&
+      item.quantity > 0 &&
+      Boolean(item.productId)
+  )
+
+  if (!input.marketplaceId || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || items.length !== input.items.length || items.length === 0) {
+    throw new Error("정산 입력값이 올바르지 않습니다.")
+  }
+
+  const productIds = [...new Set(items.map((item) => item.productId))]
+  if (productIds.length !== items.length) throw new Error("같은 제품은 한 번만 등록할 수 있습니다.")
+
+  const [{ data: store, error: storeError }, { data: products, error: productsError }, { data: existing, error: existingError }, { data: setting, error: settingError }] =
+    await Promise.all([
+      supabase.from("stores").select("id,commission_rate").eq("user_id", userId).eq("id", input.marketplaceId).maybeSingle(),
+      supabase.from("products").select("id,name,sku,price").eq("user_id", userId).in("id", productIds),
+      supabase.from("settlements_v2").select("id").eq("user_id", userId).eq("marketplace_id", input.marketplaceId).eq("period_month", month).eq("settlement_type", "detailed").limit(1).maybeSingle(),
+      supabase.from("marketplace_settings").select("commission_rate").eq("user_id", userId).eq("marketplace_id", input.marketplaceId).maybeSingle(),
+    ])
+
+  if (storeError || productsError || existingError || settingError) throw storeError ?? productsError ?? existingError ?? settingError
+  if (!store || (products ?? []).length !== productIds.length) throw new Error("입점처 또는 제품 권한을 확인할 수 없습니다.")
+  if (existing) throw new Error("DUPLICATE_SETTLEMENT")
+
+  const productsById = new Map((products ?? []).map((product) => [String(product.id), product]))
+  const configuredRate = Number(setting?.commission_rate ?? 0)
+  const commissionRate = configuredRate > 0 ? configuredRate : Number(store.commission_rate ?? 0) / 100
+  const lines = items.map((item) => {
+    const product = productsById.get(item.productId)
+    const unitPrice = Number(product?.price ?? 0)
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error("제품 판매가를 확인할 수 없습니다.")
+    const grossAmount = item.quantity * unitPrice
+    return {
+      productId: item.productId,
+      productNameRaw: String(product?.name ?? ""),
+      productNameMatched: String(product?.name ?? "") || null,
+      skuRaw: product?.sku ?? null,
+      qtySold: item.quantity,
+      unitPrice,
+      grossAmount,
+      matchStatus: "matched" as const,
+    }
+  })
+  const grossAmount = lines.reduce((sum, line) => sum + line.grossAmount, 0)
+  const commissionAmount = Math.round(grossAmount * commissionRate)
+
+  let settlementId = ""
+  try {
+    const settlement = await createSettlementHeaderDB({
+      marketplaceId: input.marketplaceId,
+      periodMonth: month,
+      currency: "KRW",
+      grossAmount,
+      commissionRate,
+      commissionAmount,
+      netAmount: grossAmount - commissionAmount,
+      rowsCount: lines.length,
+      sourceFilename: null,
+      applyToInventory: false,
+      settlementType: "detailed",
+    })
+    settlementId = settlement.id
+    await replaceSettlementLinesDB({ settlementId, marketplaceId: input.marketplaceId, lines })
+    await recomputeSettlementProductStatsDB({ marketplaceId: input.marketplaceId, periodMonth: month })
+    return settlementId
+  } catch (error) {
+    if (settlementId) {
+      await supabase.from("settlement_lines_v2").delete().eq("user_id", userId).eq("settlement_id", settlementId)
+      await supabase.from("settlements_v2").delete().eq("user_id", userId).eq("id", settlementId)
+    }
+    throw error
+  }
+}
+
 export async function replaceSettlementLinesDB(input: {
   settlementId: string
   marketplaceId: string
