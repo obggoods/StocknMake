@@ -4,12 +4,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent } from "react"
 import { toast } from "@/lib/toast"
-
+import { parseCommissionPercentInput } from "@/lib/commissionRate"
+import * as XLSX from "xlsx"
 import type { AppData } from "@/data/models"
 import { downloadJson, generateId, readJsonFile } from "@/data/store"
 import {
   loadDataFromDB,
-  ensureStoreProductStatesSeedDB,
   setStoreProductEnabledDB,
   setStoreProductsEnabledBulkDB,
   createProductDB,
@@ -21,6 +21,7 @@ import {
   deleteCategoryDB,
   updateStoreDB,
   upsertProductsBulkDB,
+  updateProductCategoryDB
 } from "@/data/store.supabase"
 import {
   supabase,
@@ -76,6 +77,7 @@ const EMPTY: AppData = {
   inventory: [],
   storeProductStates: [],
   settlements: [],
+  settlementsV2: [],
   plans: [],
   updatedAt: Date.now(),
 }
@@ -153,15 +155,6 @@ function parseSimpleCSV(text: string): ProductCsvRow[] {
   return rows
 }
 
-function downloadCsv(filename: string, csvBody: string) {
-  const blob = new Blob(["\uFEFF" + csvBody], { type: "text/csv;charset=utf-8;" })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -179,17 +172,15 @@ async function withOneRetryOnFetch<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+
+
 export function useAppData() {
   const [data, setData] = useState<AppData>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [syncing, setSyncing] = useState(false)
   // ✅ refresh 중복 호출 방지
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const refreshQueuedRef = useRef(false)
-  
-// ✅ seed(스토어×제품 상태) 호출 최소화: store/product id 목록이 바뀔 때만 실행
-const seedKeyRef = useRef<string>("")
 
   // ✅ 유저별 설정
   const [defaultTargetQtyInput, setDefaultTargetQtyInput] = useState<string>("5")
@@ -229,6 +220,8 @@ const [newStoreMemo, setNewStoreMemo] = useState<string>("")
   const [categoryTyped, setCategoryTyped] = useState(false)
   const [categoryOpen, setCategoryOpen] = useState(false)
   const [categories, setCategories] = useState<string[]>([])
+
+  
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>()
@@ -276,6 +269,7 @@ useEffect(() => {
 }, [])
 
 const refresh = useCallback(async () => {
+  console.time("[perf] refresh")
   if (refreshInFlightRef.current) {
     refreshQueuedRef.current = true
     return refreshInFlightRef.current
@@ -294,20 +288,6 @@ const refresh = useCallback(async () => {
         const next = await loadDataFromDB()
         setData(next)
     
-        // ✅ seed는 store/product 조합이 바뀔 때만 실행
-        const storeIds = next.stores.map((s) => s.id).sort()
-        const productIds = next.products.map((p) => p.id).sort()
-        const nextSeedKey = `${storeIds.join(",")}||${productIds.join(",")}`
-    
-        if (nextSeedKey !== seedKeyRef.current) {
-          seedKeyRef.current = nextSeedKey
-    
-          await ensureStoreProductStatesSeedDB({
-            storeIds,
-            productIds,
-          })
-        }
-    
         const cats = await loadCategoriesDB()
         setCategories(cats)
       })
@@ -319,6 +299,8 @@ const refresh = useCallback(async () => {
           ? "네트워크 연결이 잠시 불안정해요. 잠시 후 다시 시도해 주세요."
           : msg
       )
+  console.timeEnd("[perf] refresh")
+  
     } finally {
       setLoading(false)
     }
@@ -338,6 +320,75 @@ const refresh = useCallback(async () => {
     refresh()
   }, [refresh])
 
+  const saveCategoryOnly = useCallback(async () => {
+    const c = String(newCategory ?? "").trim()
+    if (!c) return
+  
+    try {
+      await upsertCategoryDB(c)
+  
+      // 로컬 목록도 즉시 갱신(중복 방지)
+      setCategories((prev) => {
+        if (prev.includes(c)) return prev
+        return [...prev, c]
+      })
+  
+      toast.success("카테고리를 저장했어요.")
+      await refresh()
+    } catch (e: any) {
+      console.error(e)
+      toast.error(`카테고리 저장 실패: ${e?.message ?? e}`)
+      await refresh()
+    }
+  }, [newCategory, refresh])
+
+  const deleteCategory = useCallback(
+    async (name: string) => {
+      const c = String(name ?? "").trim()
+      if (!c) return
+  
+      try {
+        setLoading(true)
+        await deleteCategoryDB(c)
+  
+        // ✅ 로컬 categories 상태 업데이트(있을 때만)
+        setCategories((prev) => prev.filter((x) => x !== c))
+  
+        toast.success("카테고리를 삭제했어요.")
+        await refresh()
+      } catch (e: any) {
+        console.error(e)
+        toast.error(`카테고리 삭제 실패: ${e?.message ?? e}`)
+        await refresh()
+      } finally {
+        setLoading(false)
+      }
+    },
+    [refresh]
+  )
+
+  const saveProductCategoryOnly = useCallback(
+  async (productId: string, category: string | null) => {
+    const pid = String(productId ?? "").trim()
+    if (!pid) return
+
+    try {
+      await updateProductCategoryDB({
+        productId: pid,
+        category: category ?? null,
+      })
+
+      toast.success("카테고리를 저장했어요.")
+      await refresh()
+    } catch (e: any) {
+      console.error(e)
+      toast.error(`카테고리 저장 실패: ${e?.message ?? e}`)
+      await refresh()
+    }
+  },
+  [refresh]
+)
+
   // ✅ 토글/대량변경 후 refresh를 "마지막 변경 2초 뒤 1번"만 실행
 const refreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -349,41 +400,62 @@ const scheduleRefresh = useCallback(() => {
   }, 2000)
 }, [refresh])
 
-  // ===== category =====
-  const saveCategoryOnly = useCallback(async () => {
-    const c = newCategory.trim()
-    if (!c) return
-    if (categoryOptions.includes(c)) {
-      setCategoryOpen(false)
+const createStoreWithFields = useCallback(
+  async (input: any) => {
+    const name = String(input?.name ?? "").trim()
+    if (!name) {
+      toast.error("입점처명은 비워둘 수 없어요.")
       return
     }
 
-    try {
-      await upsertCategoryDB(c)
-      toast.success("카테고리를 저장했어요.")
-      setNewCategory("")
-      setCategoryTyped(false)
-      setCategoryOpen(false)
-      await refresh()
-    } catch {
-      toast.error("카테고리 저장에 실패했어요.")
-    }
-  }, [newCategory, categoryOptions, refresh])
+    const id =
+      (globalThis.crypto as any)?.randomUUID?.() ??
+      `store_${Date.now()}_${Math.random().toString(16).slice(2)}`
 
-  const deleteCategory = useCallback(
-    async (c: string) => {
-      const name = (c ?? "").trim()
-      if (!name) return
-      try {
-        await deleteCategoryDB(name)
-        toast.success("카테고리를 삭제했어요.")
-        await refresh()
-      } catch {
-        toast.error("카테고리 삭제에 실패했어요.")
-      }
-    },
-    [refresh]
-  )
+    const now = Date.now()
+
+    const store = {
+      id,
+      name,
+      createdAt: now,
+
+      commissionRate: input.commissionRate ?? null,
+      targetQtyOverride: input.targetQtyOverride ?? null,
+      contactName: input.contactName ?? null,
+      phone: input.phone ?? null,
+      address: input.address ?? null,
+      memo: input.memo ?? null,
+
+      status: input.status ?? "active",
+      channel: input.channel ?? "offline",
+      tags: input.tags ?? [],
+
+      storeFee: Math.max(0, Number(input.storeFee ?? 0) || 0),
+      includeMonthlyRentInMargin: input.includeMonthlyRentInMargin ?? true,
+      settlementCycle: input.settlementCycle ?? null,
+      settlementDay: input.settlementDay ?? null,
+      settlementNote: input.settlementNote ?? null,
+    } as any
+
+    try {
+      // loading은 프로젝트마다 setLoading이 없을 수 있으니, 있는 경우만 사용
+      // @ts-ignore
+      if (typeof setLoading === "function") setLoading(true)
+
+      await createStoreDB(store)
+      toast.success("입점처를 추가했어요.")
+      await refresh()
+    } catch (e: any) {
+      console.error(e)
+      toast.error(`추가 실패: ${e?.message ?? e}`)
+      await refresh()
+    } finally {
+      // @ts-ignore
+      if (typeof setLoading === "function") setLoading(false)
+    }
+  },
+  [refresh]
+)
 
   // ===== products =====
   const addProduct = useCallback(async () => {
@@ -624,7 +696,7 @@ const scheduleRefresh = useCallback(() => {
     if (!name) return
     const commissionRaw = newStoreCommissionInput.trim()
 const commissionRate =
-  commissionRaw === "" ? null : Math.max(0, Number(commissionRaw) || 0)
+  commissionRaw === "" ? null : parseCommissionPercentInput(commissionRaw)
 
 const targetRaw = newStoreTargetQtyInput.trim()
 const targetQtyOverride =
@@ -646,6 +718,8 @@ const s = {
   phone,
   address,
   memo,
+  storeFee: null,
+  includeMonthlyRentInMargin: true,
 }
 
     const prevStores = data.stores
@@ -767,6 +841,16 @@ setNewStoreMemo("")
         phone: string | null
         address: string | null
         memo: string | null
+  
+        // ✅ 신규 운영/정산 필드(옵션: 기존 호출부 깨지지 않게 optional)
+        status?: "active" | "inactive" | null
+        channel?: "online" | "offline" | null
+        tags?: string[] | null
+        storeFee?: number | null
+        includeMonthlyRentInMargin?: boolean | null
+        settlementCycle?: "monthly" | "weekly" | "biweekly" | "ad-hoc" | null
+        settlementDay?: number | null
+        settlementNote?: string | null
       }
     ) => {
       const hit = data.stores.find((s) => s.id === storeId)
@@ -778,6 +862,18 @@ setNewStoreMemo("")
         return
       }
   
+      // ✅ tags 정리(빈값 제거 + trim + 중복 제거)
+      const cleanedTags = Array.from(
+        new Set((input.tags ?? (hit as any).tags ?? []).map((t: string) => t.trim()).filter(Boolean))
+      )
+  
+      // ✅ settlementDay 검증 (1~31만 허용, 아니면 null)
+      const sdRaw = input.settlementDay
+      const settlementDay =
+        sdRaw == null ? ((hit as any).settlementDay ?? null) : Number.isFinite(sdRaw) ? sdRaw : null
+      const safeSettlementDay =
+        settlementDay == null ? null : settlementDay >= 1 && settlementDay <= 31 ? settlementDay : null
+  
       const next = {
         ...hit,
         name: nextName,
@@ -787,6 +883,21 @@ setNewStoreMemo("")
         phone: input.phone ?? null,
         address: input.address ?? null,
         memo: input.memo ?? null,
+  
+        // ✅ 신규 필드: undefined면 기존값 유지
+        status: input.status ?? (hit as any).status ?? "active",
+        channel: input.channel ?? (hit as any).channel ?? "offline",
+        tags: cleanedTags,
+  
+        storeFee: Math.max(
+          0,
+          Number(input.storeFee ?? (hit as any).storeFee ?? (hit as any).monthlyRentFee ?? 0) || 0
+        ),
+        includeMonthlyRentInMargin:
+          input.includeMonthlyRentInMargin ?? (hit as any).includeMonthlyRentInMargin ?? true,
+        settlementCycle: input.settlementCycle ?? (hit as any).settlementCycle ?? null,
+        settlementDay: safeSettlementDay,
+        settlementNote: input.settlementNote ?? (hit as any).settlementNote ?? null,
       }
   
       const prevStores = data.stores
@@ -809,7 +920,7 @@ setNewStoreMemo("")
       }
     },
     [data.stores, refresh]
-  )  
+  )
 
   // ===== CSV products upload =====
 const isProvidedCsvValue = (v: any) =>
@@ -927,11 +1038,12 @@ const applyCsvProducts = useCallback(
           price: p.price ?? 0,
           sku: p.sku ?? null,
           barcode: p.barcode ?? null,
+          headquartersStockQty: p.headquartersStockQty ?? p.headquarters_stock_qty ?? 0,
         })),
       })
 
       toast.success(
-        `CSV 반영 완료: ${changed.length}건 처리됨` +
+        `파일 반영 완료: ${changed.length}건 처리됨` +
           (overwriteMode === "overwrite" ? " (덮어쓰기 포함)" : " (빈 값만 채움)")
       )
       await refresh()
@@ -939,7 +1051,7 @@ const applyCsvProducts = useCallback(
       console.error(e)
       setData(prevData)
       setCategories(prevCategories)
-      toast.error(`CSV 업로드 실패: ${e?.message ?? e}`)
+      toast.error(`파일 업로드 실패: ${e?.message ?? e}`)
       await refresh()
     } finally {
       setCsvBusy(false)
@@ -1042,14 +1154,134 @@ if (suspicious.length > 0) {
   [data.products, applyCsvProducts]
 )
 
-const onChangeProductCsv = useCallback(
-  async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    await handleProductCsvFile(file)
-  },
-  [handleProductCsvFile]
-)
+const onChangeProductUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0]
+  if (!file) return
+
+  try {
+    setCsvBusy(true)
+
+    const fileName = file.name.toLowerCase()
+
+    let rows: ProductCsvRow[] = []
+
+    if (fileName.endsWith(".csv")) {
+      const text = await file.text()
+      rows = parseSimpleCSV(text)
+    } else if (fileName.endsWith(".xlsx")) {
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: "array" })
+      const firstSheetName = workbook.SheetNames[0]
+      const firstSheet = workbook.Sheets[firstSheetName]
+
+      const jsonRows = XLSX.utils.sheet_to_json<Record<string, any>>(firstSheet, {
+        defval: "",
+      })
+
+      rows = jsonRows.map((row) => ({
+        category: String(row.category ?? "").trim(),
+        name: String(row.name ?? "").trim(),
+        active: parseBooleanLike(String(row.active ?? "")),
+        price: parseNumberLikeNullable(String(row.price ?? "")),
+        sku: String(row.sku ?? "").trim() || null,
+        barcode: String(row.barcode ?? "").trim() || null,
+      }))
+
+      if (!rows.length) {
+        throw new Error("엑셀 첫 번째 시트에 업로드할 데이터가 없어요.")
+      }
+    } else {
+      throw new Error("CSV 또는 XLSX 파일만 업로드 가능합니다.")
+    }
+
+    const suspicious = rows.filter((r) => {
+      const sku = String(r.sku ?? "").trim()
+      const bc = String(r.barcode ?? "").trim()
+      return /e\+?\d+/i.test(sku) || /e\+?\d+/i.test(bc) || sku.includes(".") || bc.includes(".")
+    })
+
+    if (suspicious.length > 0) {
+      toast.error(
+        "바코드/SKU가 엑셀에서 숫자로 변환된 것 같아요. (예: 8.8E+12) 텍스트 형식으로 저장 후 다시 업로드해 주세요."
+      )
+    }
+
+    const cleaned: ProductCsvRow[] = rows
+      .map((r) => ({
+        category: (r.category ?? "").trim(),
+        name: (r.name ?? "").trim(),
+        active: r.active,
+        price: r.price ?? null,
+        sku: r.sku ?? null,
+        barcode: r.barcode ?? null,
+      }))
+      .filter((r) => r.name.length > 0)
+
+    if (cleaned.length === 0) {
+      toast.error("업로드할 제품이 없습니다. (name이 비어있으면 무시됩니다)")
+      return
+    }
+
+    const byKey = new Map<string, ProductCsvRow>()
+    for (const r of cleaned) {
+      const key = `${normalizeCategoryKey(r.category)}||${normalizeNameKey(r.name)}`
+      byKey.set(key, r)
+    }
+    const uniqueRows: ProductCsvRow[] = Array.from(byKey.values())
+
+    const existing = new Map<string, any>()
+    for (const p of data.products) {
+      const key = `${normalizeCategoryKey(p.category)}||${normalizeNameKey(p.name)}`
+      existing.set(key, p)
+    }
+
+    const conflicts: ProductCsvConflict[] = []
+
+    for (const r of uniqueRows) {
+      const catTrim = (r.category ?? "").trim()
+      const categoryOrNull = catTrim === "" ? null : catTrim
+      const key = `${normalizeCategoryKey(categoryOrNull ?? "")}||${normalizeNameKey(r.name)}`
+      const hit = existing.get(key)
+      if (!hit) continue
+
+      if (typeof r.active === "boolean" && differsCsvValue(Boolean(hit.active), Boolean(r.active))) {
+        conflicts.push({ key, name: r.name, field: "active", oldV: hit.active, newV: r.active })
+      }
+
+      if (r.price !== null && r.price !== undefined) {
+        const oldP = Number(hit.price ?? 0)
+        const newP = Number(r.price ?? 0)
+        if (Number.isFinite(newP) && oldP !== newP) {
+          conflicts.push({ key, name: r.name, field: "price", oldV: hit.price, newV: r.price })
+        }
+      }
+
+      if (isProvidedCsvValue(r.sku) && isProvidedCsvValue(hit.sku) && differsCsvValue(hit.sku, r.sku)) {
+        conflicts.push({ key, name: r.name, field: "sku", oldV: hit.sku, newV: r.sku })
+      }
+
+      if (
+        isProvidedCsvValue(r.barcode) &&
+        isProvidedCsvValue(hit.barcode) &&
+        differsCsvValue(hit.barcode, r.barcode)
+      ) {
+        conflicts.push({ key, name: r.name, field: "barcode", oldV: hit.barcode, newV: r.barcode })
+      }
+    }
+
+    if (conflicts.length > 0) {
+      setCsvConflictInfo({ fileName: file.name, rows: uniqueRows, conflicts })
+      return
+    }
+
+    await applyCsvProducts(uniqueRows, "overwrite")
+  } catch (err: any) {
+    toast.error(err?.message ?? "제품 파일 업로드에 실패했어요.")
+  } finally {
+    setCsvBusy(false)
+    if (e.target) e.target.value = ""
+  }
+}
 
 const resolveProductCsvConflict = useCallback(
   async (mode: "overwrite" | "safe") => {
@@ -1093,6 +1325,7 @@ const cancelProductCsvConflict = useCallback(() => {
         inventory: parsed.inventory ?? [],
         storeProductStates: parsed.storeProductStates ?? [],
         settlements: parsed.settlements ?? [],
+        settlementsV2: parsed.settlementsV2 ?? [], // ✅ 추가
         plans: parsed.plans ?? [],
         updatedAt: Date.now(),
       }
@@ -1165,9 +1398,9 @@ const cancelProductCsvConflict = useCallback(() => {
     setCategoryTyped,
     categoryOpen,
     setCategoryOpen,
-    isExistingCategory,
-    saveCategoryOnly,
     deleteCategory,
+    saveCategoryOnly,
+    saveProductCategoryOnly,
 
     // products
     newProductName,
@@ -1198,13 +1431,14 @@ const cancelProductCsvConflict = useCallback(() => {
     setNewStoreCommissionInput,
     newStoreMemo,
     setNewStoreMemo,
+    createStoreWithFields,
 
     // csv
     csvInputRef,
     csvBusy,
     csvConflictInfo,
     handleProductCsvUpload,
-    onChangeProductCsv,
+    onChangeProductUpload,
     resolveProductCsvConflict,
     cancelProductCsvConflict,
 

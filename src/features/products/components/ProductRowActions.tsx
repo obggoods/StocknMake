@@ -20,7 +20,7 @@ export default function ProductRowActions(props: Props) {
   const [open, setOpen] = useState(false)
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <AppButton type="button" variant="ghost" size="icon-sm" disabled={disabled} aria-label="작업">
           <MoreHorizontal className="h-4 w-4" />

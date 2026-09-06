@@ -1,0 +1,68 @@
+name: DB Backup
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Postgres 17 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg ca-certificates lsb-release
+          echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Check pg_dump version
+        run: /usr/lib/postgresql/17/bin/pg_dump --version
+
+      - name: Validate required secrets
+        run: |
+          test -n "$DATABASE_URL_DIRECT" || (echo "Missing DATABASE_URL_DIRECT" && exit 1)
+          test -n "$SUPABASE_URL" || (echo "Missing SUPABASE_URL" && exit 1)
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || (echo "Missing SUPABASE_SERVICE_ROLE_KEY" && exit 1)
+
+      - name: Run pg_dump
+        run: |
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL_DIRECT" \
+            --encoding=UTF8 \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --clean \
+            --if-exists \
+            --file=backup.sql
+
+      - name: Verify backup file
+        run: |
+          test -s backup.sql || (echo "backup.sql is empty" && exit 1)
+          ls -lh backup.sql
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup
+          path: backup.sql
+
+      - name: Upload to Supabase Storage
+        run: |
+          BACKUP_NAME="backup-$(date +%F-%H%M%S).sql"
+          curl --fail-with-body --show-error -X PUT "$SUPABASE_URL/storage/v1/object/backups/$BACKUP_NAME" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/octet-stream" \
+            -H "x-upsert: true" \
+            --data-binary "@backup.sql"

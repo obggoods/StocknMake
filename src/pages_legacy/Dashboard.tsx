@@ -14,7 +14,7 @@ const RESTOCK_TO_DEFAULT = 5;
 // 제작 리스트의 "합계" 탭을 위한 특수 ID
 const ALL_TAB_ID = "__ALL__";
 
-const FILE_PREFIX = "ShopPlanner";
+const FILE_PREFIX = "StocknMake";
 
 const DASH = {
   inventory: "inventory",

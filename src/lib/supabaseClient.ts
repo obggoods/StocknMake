@@ -109,9 +109,10 @@ export async function listMyMarginProducts() {
   const user = authData.user
   if (!user) throw new Error("No authenticated user")
 
-  const { data, error } = await supabase
+    const { data, error } = await supabase
     .from("margin_products")
     .select("id,user_id,name,memo,data,created_at,updated_at")
+    .eq("user_id", user.id)
     .order("updated_at", { ascending: false })
 
   if (error) throw error
@@ -147,6 +148,33 @@ export async function upsertMyMarginProduct(input: {
   return data as MarginProductRow
 }
 
+export async function updateMyMarginProductData(input: {
+  id: string
+  name: string
+  memo?: string
+  data: any
+}) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser()
+  if (authErr) throw authErr
+  const user = authData.user
+  if (!user) throw new Error("No authenticated user")
+
+  const { data, error } = await supabase
+    .from("margin_products")
+    .update({
+      name: input.name,
+      memo: input.memo ?? null,
+      data: input.data ?? {},
+    })
+    .eq("id", input.id)
+    .eq("user_id", user.id)
+    .select("id,user_id,name,memo,data,created_at,updated_at")
+    .single()
+
+  if (error) throw error
+  return data as MarginProductRow
+}
+
 export async function deleteMyMarginProduct(id: string) {
   const { data: authData, error: authErr } = await supabase.auth.getUser()
   if (authErr) throw authErr
@@ -171,6 +199,7 @@ export async function listMyMaterialLibrary() {
   const { data, error } = await supabase
     .from("material_library")
     .select("id,user_id,name,unit_price,created_at,updated_at")
+    .eq("user_id", user.id)
     .order("updated_at", { ascending: false })
 
   if (error) throw error
@@ -237,4 +266,88 @@ export async function deleteMyMaterialLibraryItem(id: string) {
     .eq("user_id", user.id)
 
   if (error) throw error
+}
+
+export type MyBillingInfo = {
+  plan_tier: "free" | "basic" | "premium"
+  billing_status: "inactive" | "trialing" | "active" | "past_due" | "canceled" | "unpaid"
+  is_paid: boolean
+  is_basic: boolean
+  is_premium: boolean
+  current_period_ends_at: string | null
+  cancel_at_period_end: boolean
+}
+
+function buildBillingInfo(params?: {
+  plan_tier?: MyBillingInfo["plan_tier"]
+  billing_status?: MyBillingInfo["billing_status"]
+  current_period_ends_at?: string | null
+  cancel_at_period_end?: boolean
+}): MyBillingInfo {
+  const plan_tier = params?.plan_tier ?? "free"
+  const billing_status = params?.billing_status ?? "inactive"
+
+  const is_paid =
+    (plan_tier === "basic" || plan_tier === "premium") &&
+    (billing_status === "trialing" || billing_status === "active")
+
+  const is_basic =
+    plan_tier === "basic" &&
+    (billing_status === "trialing" || billing_status === "active")
+
+  const is_premium =
+    plan_tier === "premium" &&
+    (billing_status === "trialing" || billing_status === "active")
+
+  return {
+    plan_tier,
+    billing_status,
+    is_paid,
+    is_basic,
+    is_premium,
+    current_period_ends_at: params?.current_period_ends_at ?? null,
+    cancel_at_period_end: Boolean(params?.cancel_at_period_end),
+  }
+}
+
+export async function getMyBilling(): Promise<MyBillingInfo> {
+  try {
+    const { data, error } = await supabase
+      .from("billing_subscriptions")
+      .select("plan_tier, billing_status, current_period_ends_at, cancel_at_period_end")
+      .maybeSingle()
+
+    if (error) {
+      throw error
+    }
+
+    if (!data) {
+      return buildBillingInfo()
+    }
+
+    return buildBillingInfo({
+      plan_tier: data.plan_tier as MyBillingInfo["plan_tier"],
+      billing_status: data.billing_status as MyBillingInfo["billing_status"],
+      current_period_ends_at: data.current_period_ends_at ?? null,
+      cancel_at_period_end: Boolean(data.cancel_at_period_end),
+    })
+  } catch (error: any) {
+    console.error("[getMyBilling fallback mode]", error)
+
+    // 개발 중 schema cache 이슈 우회용
+    if (import.meta.env.DEV) {
+      const { data: userResult } = await supabase.auth.getUser()
+      const currentUserId = userResult.user?.id ?? null
+
+      // 네 테스트 계정 UUID
+      if (currentUserId === "f6a96f94-229a-47f9-ac1b-a8767b43b77c") {
+        return buildBillingInfo({
+          plan_tier: "basic",
+          billing_status: "active",
+        })
+      }
+    }
+
+    return buildBillingInfo()
+  }
 }

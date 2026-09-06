@@ -49,13 +49,23 @@ export function AppCard({
       )}
     >
       {(title || description || action) && (
-        <CardHeader className={cn(isCompact ? "px-4 pb-0" : null, headerClassName)}>
+        <CardHeader
+        className={cn(
+          isCompact ? "px-4 pb-0" : null,
+          "has-data-[slot=card-action]:grid-cols-1 xl:has-data-[slot=card-action]:grid-cols-[1fr_auto]",
+          headerClassName
+        )}
+      >
           <div className="grid gap-1">
             {title ? <CardTitle className="text-base">{title}</CardTitle> : null}
             {description ? <CardDescription>{description}</CardDescription> : null}
           </div>
 
-          {action ? <CardAction>{action}</CardAction> : null}
+          {action ? (
+  <CardAction className="col-start-1 row-start-auto row-span-1 w-full justify-self-start xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:w-auto xl:justify-self-end">
+    {action}
+  </CardAction>
+) : null}
         </CardHeader>
       )}
 

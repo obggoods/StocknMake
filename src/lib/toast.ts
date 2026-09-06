@@ -9,6 +9,9 @@ export type ToastItem = {
   kind: ToastKind;
   message: string;
   createdAt: number;
+
+  actionLabel?: string;
+  onAction?: () => void;
 };
 
 type Listener = (items: ToastItem[]) => void;
@@ -20,9 +23,23 @@ function emit() {
   for (const l of listeners) l(items);
 }
 
-function add(kind: ToastKind, message: string) {
+function add(
+  kind: ToastKind,
+  message: string,
+  options?: {
+    actionLabel?: string;
+    onAction?: () => void;
+  }
+) {
   const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const next: ToastItem = { id, kind, message, createdAt: Date.now() };
+  const next: ToastItem = {
+  id,
+  kind,
+  message,
+  createdAt: Date.now(),
+  actionLabel: options?.actionLabel,
+  onAction: options?.onAction,
+};
   items = [next, ...items].slice(0, 4);
   emit();
 
@@ -34,9 +51,14 @@ function add(kind: ToastKind, message: string) {
 }
 
 export const toast = {
-  success: (message: string) => add("success", message),
-  error: (message: string) => add("error", message),
-  message: (message: string) => add("info", message),
+  success: (message: string, options?: { actionLabel?: string; onAction?: () => void }) =>
+    add("success", message, options),
+
+  error: (message: string, options?: { actionLabel?: string; onAction?: () => void }) =>
+    add("error", message, options),
+
+  message: (message: string, options?: { actionLabel?: string; onAction?: () => void }) =>
+    add("info", message, options),
 };
 
 export function subscribeToToasts(listener: Listener) {

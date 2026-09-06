@@ -1,9 +1,11 @@
 // src/App.tsx
-import { Suspense, lazy, useEffect, useState } from "react"
+import { Suspense, lazy, useEffect, useRef, useState } from "react"
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom"
-import type { Session } from "@supabase/supabase-js"
-
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js"
+import Pricing from "@/pages_legacy/Pricing"
 import "./App.css"
+import AppLoadingScreen from "@/components/shared/AppLoadingScreen"
+import { Toaster } from "sonner"
 
 import AppLayout from "./app/layout/AppLayout"
 
@@ -13,11 +15,13 @@ const StoresPage = lazy(() => import("./features/stores/pages/StoresPage"))
 const SettingsPage = lazy(() => import("./features/settings/pages/SettingsPage"))
 const MarginCalculatorPage = lazy(() => import("./features/margin/pages/MarginCalculatorPage"))
 const SettlementsPage = lazy(() => import("./features/settlements/pages/SettlementsPage"))
+const AnalysisPage = lazy(() => import("./features/analysis/pages/AnalysisPage"))
 const AdminInvitesPage = lazy(() => import("./pages_legacy/AdminInvites"))
 const LoginPage = lazy(() => import("./pages_legacy/Login"))
 const InviteGatePage = lazy(() => import("./pages_legacy/InviteGate"))
+const InventoryPage = lazy(() => import("./features/inventory/pages/InventoryPage"))
 
-import { supabase, getOrCreateMyProfile } from "./lib/supabaseClient"
+import { supabase, getOrCreateMyProfile, getMyBilling } from "./lib/supabaseClient"
 
 type MyProfile = {
   is_invited?: boolean
@@ -25,6 +29,8 @@ type MyProfile = {
 
 export default function App() {
   const nav = useNavigate()
+
+  const currentUserIdRef = useRef<string | null>(null)
 
   const [session, setSession] = useState<Session | null>(null)
   const [bootLoading, setBootLoading] = useState(true)
@@ -35,157 +41,251 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [adminChecked, setAdminChecked] = useState(false)
 
+  const [billingLoaded, setBillingLoaded] = useState(false)
+  const [billingPlan, setBillingPlan] = useState<"free" | "basic" | "premium">("free")
+  const [isPaidUser, setIsPaidUser] = useState(false)
+  const userId = session?.user.id ?? null
+
   // ✅ 0) 세션 부트스트랩 + Auth 상태 변화 구독
-  useEffect(() => {
-    let alive = true
+useEffect(() => {
+  let alive = true
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!alive) return
-      setSession(data.session)
-      setBootLoading(false)
-    })
+  const resetAppGateState = () => {
+    setProfile(null)
+    setIsAdmin(false)
+    setAdminChecked(false)
+    setBillingLoaded(false)
+    setBillingPlan("free")
+    setIsPaidUser(false)
+  }
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+  supabase.auth.getSession().then(({ data }) => {
+    if (!alive) return
+
+    const initialSession = data.session
+    currentUserIdRef.current = initialSession?.user.id ?? null
+
+    setSession(initialSession)
+    setBootLoading(false)
+  })
+
+  const { data: sub } = supabase.auth.onAuthStateChange(
+    (event: AuthChangeEvent, newSession) => {
+      const nextUserId = newSession?.user.id ?? null
+      const prevUserId = currentUserIdRef.current
+
+      // ✅ 로그아웃 또는 세션 없음: 앱 접근 상태 초기화
+      if (event === "SIGNED_OUT" || !nextUserId) {
+        currentUserIdRef.current = null
+        setSession(null)
+        resetAppGateState()
+        return
+      }
+
+      // ✅ 같은 사용자 세션 갱신/TOKEN_REFRESHED/INITIAL_SESSION은 화면을 갈아엎지 않음
+      // 탭 전환 후 돌아왔을 때 입력 중인 모달/폼이 날아가는 문제 방지
+      if (prevUserId === nextUserId) {
+        if (event === "USER_UPDATED") {
+          setSession(newSession)
+        }
+        return
+      }
+
+      // ✅ 실제 로그인 계정이 바뀐 경우에만 앱 접근 상태 재확인
+      currentUserIdRef.current = nextUserId
       setSession(newSession)
-      setProfile(null)
-      setIsAdmin(false)
-      setAdminChecked(false)
-    })
-
-    return () => {
-      alive = false
-      sub.subscription.unsubscribe()
+      resetAppGateState()
     }
-  }, [])
+  )
+
+  return () => {
+    alive = false
+    sub.subscription.unsubscribe()
+  }
+}, [])
 
   // ✅ 1) 로그인 상태에서만 프로필 로드 (초대 여부)
   useEffect(() => {
     let alive = true
 
-    ;(async () => {
-      if (!session) return
+      ; (async () => {
+        if (!userId) return
 
-      try {
-        setProfileLoading(true)
-        const p = await getOrCreateMyProfile()
-        if (!alive) return
-        setProfile(p as MyProfile)
-      } catch (e) {
-        console.error("[App] profile load failed", e)
-        if (!alive) return
-        setProfile({ is_invited: false })
-      } finally {
-        if (alive) setProfileLoading(false)
-      }
-    })()
+        try {
+          setProfileLoading(true)
+          const p = await getOrCreateMyProfile()
+          if (!alive) return
+          setProfile(p as MyProfile)
+        } catch (e) {
+          console.error("[App] profile load failed", e)
+          if (!alive) return
+          setProfile({ is_invited: false })
+        } finally {
+          if (alive) setProfileLoading(false)
+        }
+      })()
 
     return () => {
       alive = false
     }
-  }, [session])
+  }, [userId])
+
+  // ✅ 1.5) 로그인 상태에서만 billing 로드
+  useEffect(() => {
+    let alive = true
+
+      ; (async () => {
+        if (!userId) {
+          if (!alive) return
+          setBillingPlan("free")
+          setIsPaidUser(false)
+          setBillingLoaded(true)
+          return
+        }
+
+        try {
+          setBillingLoaded(false)
+          const billing = await getMyBilling()
+          if (!alive) return
+
+          setBillingPlan(billing.plan_tier)
+          setIsPaidUser(billing.is_paid)
+        } catch (e) {
+          console.error("[App] billing load failed", e)
+          if (!alive) return
+
+          setBillingPlan("free")
+          setIsPaidUser(false)
+        } finally {
+          if (alive) setBillingLoaded(true)
+        }
+      })()
+
+    return () => {
+      alive = false
+    }
+  }, [userId])
 
   // ✅ 2) 로그인 상태에서만 관리자 여부 체크
   useEffect(() => {
     let cancelled = false
 
-    ;(async () => {
-      if (!session) {
-        if (!cancelled) {
-          setIsAdmin(false)
-          setAdminChecked(true)
+      ; (async () => {
+        if (!userId) {
+          if (!cancelled) {
+            setIsAdmin(false)
+            setAdminChecked(true)
+          }
+          return
         }
-        return
-      }
 
-      const { data, error } = await supabase.rpc("is_admin")
-      if (cancelled) return
+        const { data, error } = await supabase.rpc("is_admin")
+        if (cancelled) return
 
-      setIsAdmin(!error && !!data)
-      setAdminChecked(true)
-    })()
+        setIsAdmin(!error && !!data)
+        setAdminChecked(true)
+      })()
 
     return () => {
       cancelled = true
     }
-  }, [session])
+  }, [userId])
 
-  if (bootLoading) return <div className="app-loading">로딩 중...</div>
+  if (bootLoading) {
+    return <AppLoadingScreen message="서비스를 준비하고 있어요" />
+  }
 
   if (!session) {
     return (
-      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Suspense>
+      <>
+        <Toaster />
+        <Suspense fallback={<AppLoadingScreen message="로그인 화면을 불러오고 있어요" />}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </Suspense>
+      </>
     )
-  }  
-
-  // ✅ 4) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
-  if (profileLoading || !profile || !adminChecked) {
-    return <div className="app-loading">초대 여부 확인 중…</div>
   }
 
-  if (!isAdmin && profile.is_invited !== true) {
+  // ✅ 4) 로그인 했으면 프로필/관리자 확인이 끝날 때까지 대기
+  if (profileLoading || !profile || !adminChecked || !billingLoaded) {
+    return <AppLoadingScreen message="초대 여부를 확인하고 있어요" />
+  }
+
+  if (!isAdmin && profile?.is_invited !== true) {
     return (
-      <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
+      <Suspense fallback={<AppLoadingScreen message="초대코드 화면을 불러오고 있어요" />}>
         <Routes>
+          {/* 로그인은 허용 */}
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* 초대코드 입력 */}
           <Route path="/invite" element={<InviteGatePage />} />
+
+          {/* 나머지는 전부 차단 */}
           <Route path="*" element={<Navigate to="/invite" replace />} />
         </Routes>
       </Suspense>
     )
-  }  
+  }
 
   // ✅ 6) 초대(또는 관리자) 통과 → 앱 화면
   return (
-    <Suspense fallback={<div className="app-loading">로딩 중...</div>}>
-      <Routes>
-        <Route
-          element={
-            <AppLayout
-              sessionEmail={session.user.email ?? ""}
-              isAdmin={isAdmin}
-              onLogout={async () => {
-                await supabase.auth.signOut()
-                nav("/login")
-              }}
-            />
-          }
-        >
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/products" element={<ProductsPage />} />
-          <Route path="/stores" element={<StoresPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/margin" element={<MarginCalculatorPage />} />
-          <Route path="/settlements" element={<SettlementsPage />} />
+    <>
+      <Toaster />
+      <Suspense fallback={<AppLoadingScreen message="화면을 불러오고 있어요" />}>
+        <Routes>
           <Route
-  path="/invite"
-  element={
-    !isAdmin && profile.is_invited !== true ? (
-      <InviteGatePage />
-    ) : (
-      <Navigate to="/dashboard" replace />
-    )
-  }
-/>
-          {/* Admin */}
-<Route
-  path="/admin/invites"
-  element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
-/>
+            element={
+              <AppLayout
+                sessionEmail={session.user.email ?? ""}
+                isAdmin={isAdmin}
+                billingPlan={billingPlan}
+                onLogout={async () => {
+                  await supabase.auth.signOut()
+                  nav("/login")
+                }}
+              />
+            }
+          >
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/inventory" element={<InventoryPage />} />
+            <Route path="/products" element={<ProductsPage />} />
+            <Route path="/stores" element={<StoresPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/margin" element={<MarginCalculatorPage />} />
+            <Route path="/analysis" element={<AnalysisPage />} />
+            <Route path="/settlements" element={<SettlementsPage />} />
+            <Route path="/pricing" element={<Pricing />} />
+            <Route
+              path="/invite"
+              element={
+                !isAdmin && profile.is_invited !== true ? (
+                  <InviteGatePage />
+                ) : (
+                  <Navigate to="/dashboard" replace />
+                )
+              }
+            />
+            {/* Admin */}
+            <Route
+              path="/admin/invites"
+              element={isAdmin ? <AdminInvitesPage /> : <Navigate to="/dashboard" replace />}
+            />
 
-{/* (임시) /admin/users로 들어오면 invites로 보내기 */}
-<Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
+            {/* (임시) /admin/users로 들어오면 invites로 보내기 */}
+            <Route path="/admin/users" element={<Navigate to="/admin/invites" replace />} />
 
-          {/* Backward compat */}
-          <Route path="/master" element={<Navigate to="/products" replace />} />
+            {/* Backward compat */}
+            <Route path="/master" element={<Navigate to="/products" replace />} />
 
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Route>
-      </Routes>
-    </Suspense>
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </>
   )
 }

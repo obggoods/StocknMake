@@ -36,7 +36,18 @@ export function Toaster() {
           <div className="font-medium">
             {t.kind === "success" ? "완료" : t.kind === "error" ? "오류" : "안내"}
           </div>
+
           <div className="text-muted-foreground">{t.message}</div>
+
+          {/* 👉 여기 중요 */}
+          {t.actionLabel && t.onAction ? (
+            <button
+              onClick={t.onAction}
+              className="mt-2 text-xs underline text-muted-foreground hover:text-foreground"
+            >
+              {t.actionLabel}
+            </button>
+          ) : null}
         </div>
       ))}
     </div>
