@@ -12,7 +12,7 @@ import { supabase } from "@/lib/supabaseClient"
 
 type Product = { id: string; name: string; category?: string | null; price?: number | null; sku?: string | null; barcode?: string | null; active?: boolean }
 type Store = { id: string; name: string; status?: string | null; commissionRate?: number | null; commission_rate?: number | null }
-type Inventory = { storeId: string; productId: string }
+type StoreProductState = { storeId: string; productId: string; enabled: boolean }
 
 function previousMonth() {
   const date = new Date()
@@ -59,7 +59,7 @@ function keepDropdownWheelInside(event: WheelEvent<HTMLDivElement>) {
   }
 }
 
-export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; stores: Store[]; products: Product[]; inventory: Inventory[]; onSaved: () => Promise<void> }) {
+export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; stores: Store[]; products: Product[]; storeProductStates: StoreProductState[]; onSaved: () => Promise<void> }) {
   const [storeId, setStoreId] = useState("")
   const [month, setMonth] = useState(previousMonth)
   const [category, setCategory] = useState("")
@@ -120,13 +120,18 @@ export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (op
   }
 
   const eligibleProducts = useMemo(() => {
-    const stocked = new Set(props.inventory.filter((item) => item.storeId === storeId).map((item) => item.productId))
     const activeProducts = props.products.filter((product) => product.active !== false)
-    if (!stocked.size) return activeProducts
-    return [...activeProducts].sort((a, b) => Number(stocked.has(b.id)) - Number(stocked.has(a.id)))
-  }, [props.inventory, props.products, storeId])
+    if (!storeId) return []
+    const states = props.storeProductStates.filter((state) => state.storeId === storeId)
+    const handled = new Set(states.filter((state) => state.enabled).map((state) => state.productId))
+    return activeProducts.filter((product) => handled.has(product.id))
+  }, [props.products, props.storeProductStates, storeId])
   const categories = useMemo(() => Array.from(new Set(eligibleProducts.map((product) => product.category?.trim() || "미분류"))).sort((a, b) => a.localeCompare(b, "ko")), [eligibleProducts])
   const selectableProducts = useMemo(() => eligibleProducts.filter((product) => !category || (product.category?.trim() || "미분류") === category).sort((a, b) => a.name.localeCompare(b.name, "ko-KR")), [category, eligibleProducts])
+  useEffect(() => {
+    if (selectedProductId && !eligibleProducts.some((product) => product.id === selectedProductId)) setSelectedProductId("")
+    if (category && !categories.includes(category)) setCategory("")
+  }, [categories, eligibleProducts, category, selectedProductId])
   const months = useMemo(monthOptions, [])
   const monthIndex = Math.max(0, months.findIndex((option) => option.value === month))
   const moveMonth = (offset: number) => {
@@ -185,7 +190,8 @@ export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (op
     if (saving) return
     try {
       setSaving(true)
-      await createManualSettlementDB({ marketplaceId: storeId, periodMonth: month, items: items.map((item) => ({ productId: item.product.id, quantity: item.quantity, unitPrice: item.unitPrice as number })) })
+      const result = await createManualSettlementDB({ marketplaceId: storeId, periodMonth: month, items: items.map((item) => ({ productId: item.product.id, quantity: item.quantity, unitPrice: item.unitPrice as number })) })
+      if (result.shortages.length > 0) toast.message("일부 제품의 판매 수량이 재고보다 많아 재고가 0으로 조정되었습니다.")
       await props.onSaved(); if (authUserId) localStorage.removeItem(draftKey(authUserId)); toast.success("정산이 등록되었습니다."); props.onOpenChange(false)
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : ""
@@ -204,14 +210,13 @@ export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (op
         <div className="shrink-0 space-y-3 rounded-xl border p-3 sm:p-4"><div className="text-sm font-medium">판매 제품 추가</div><div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] lg:items-end">
           <label className="min-w-0 space-y-1 text-sm">카테고리<Popover open={categoryPickerOpen} onOpenChange={setCategoryPickerOpen}><PopoverTrigger asChild><AppButton type="button" variant="outline" className="h-8 w-full min-w-0 justify-between px-3 text-left font-normal"><span className="truncate">{category || "전체 카테고리"}</span><ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" /></AppButton></PopoverTrigger><PopoverContent className="w-[min(320px,calc(100vw-3rem))] p-0" align="start"><Command><CommandInput placeholder="카테고리 검색..." /><CommandList onWheelCapture={keepDropdownWheelInside} className="max-h-60 overscroll-contain touch-pan-y"><CommandEmpty>카테고리가 없습니다.</CommandEmpty><CommandGroup><CommandItem value="전체 카테고리" onSelect={() => { setCategory(""); setSelectedProductId(""); setCategoryPickerOpen(false) }}><Check className={`mr-2 h-4 w-4 ${!category ? "opacity-100" : "opacity-0"}`} />전체 카테고리</CommandItem>{categories.map((value) => <CommandItem key={value} value={value} onSelect={() => { setCategory(value); setSelectedProductId(""); setCategoryPickerOpen(false) }}><Check className={`mr-2 h-4 w-4 ${category === value ? "opacity-100" : "opacity-0"}`} /><span className="truncate">{value}</span></CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></label>
           <label className="min-w-0 space-y-1 text-sm">제품<Popover open={productPickerOpen} onOpenChange={setProductPickerOpen}><PopoverTrigger asChild><AppButton type="button" variant="outline" className="h-8 w-full min-w-0 justify-between px-3 text-left font-normal" disabled={!storeId}><span className="min-w-0 truncate">{selectedProduct?.name ?? (storeId ? "제품명 검색 또는 선택" : "입점처 먼저 선택")}</span><ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" /></AppButton></PopoverTrigger><PopoverContent className="w-[min(420px,calc(100vw-3rem))] p-0" align="start"><Command><CommandInput placeholder="제품명, SKU, 바코드 검색..." /><CommandList onWheelCapture={keepDropdownWheelInside} className="max-h-60 overscroll-contain touch-pan-y"><CommandEmpty>제품이 없습니다.</CommandEmpty><CommandGroup>{selectableProducts.map((product) => { const added = quantities[product.id] !== undefined; return <CommandItem key={product.id} value={`${product.name} ${product.sku ?? ""} ${product.barcode ?? ""}`} disabled={added} onSelect={() => { if (!added) { setSelectedProductId(product.id); setProductPickerOpen(false) } }}><Check className={`mr-2 h-4 w-4 ${selectedProductId === product.id ? "opacity-100" : "opacity-0"}`} /><span className="min-w-0 flex-1 truncate">{product.name}</span>{added ? <span className="text-xs text-muted-foreground">이미 추가됨</span> : null}</CommandItem> })}</CommandGroup></CommandList></Command></PopoverContent></Popover></label>
-          <label className="min-w-0 space-y-1 text-sm">판매 수량<AppInput className="h-8" type="number" min="1" step="1" inputMode="numeric" value={addQuantity} onChange={(event) => setAddQuantity(event.target.value)} /></label><AppButton type="button" className="h-8 w-full self-end whitespace-nowrap" onClick={addProduct} disabled={!selectedProduct}>제품 추가</AppButton>
+          <label className="min-w-0 space-y-1 text-sm">판매 수량<AppInput className="h-8" type="number" min="1" step="1" inputMode="numeric" value={addQuantity} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setAddQuantity(event.target.value)} /></label><AppButton type="button" className="h-8 w-full self-end whitespace-nowrap" onClick={addProduct} disabled={!selectedProduct}>제품 추가</AppButton>
         </div></div>
-        <div className={items.length > 3 ? "flex min-h-0 flex-1 flex-col space-y-2" : "shrink-0 space-y-2"}><div className="shrink-0 text-sm font-medium">판매 제품 {items.length}종</div><div ref={productListRef} className={items.length > 3 ? "min-h-0 flex-1 max-h-[min(340px,32vh)] overflow-y-auto overflow-x-hidden pr-1" : "shrink-0"}>{items.length === 0 ? <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">아직 추가된 판매 제품이 없습니다.<br />위에서 제품과 수량을 선택해 추가해주세요.</div> : items.map((item) => <div key={item.product.id} className="mb-2 grid gap-2 rounded-lg border p-3 last:mb-0 sm:grid-cols-[1fr_110px_110px_120px_auto] sm:items-center"><div className="min-w-0"><div className="text-xs text-muted-foreground">{item.product.category?.trim() || "미분류"}</div><div className="truncate font-medium">{item.product.name}</div></div><AppInput aria-label={`${item.product.name} 판매 단가`} type="number" min="0" step="1" inputMode="numeric" value={unitPrices[item.product.id] ?? ""} onChange={(event) => setUnitPrices((previous) => ({ ...previous, [item.product.id]: event.target.value }))} /><AppInput aria-label={`${item.product.name} 판매 수량`} type="number" min="1" step="1" inputMode="numeric" value={quantities[item.product.id] ?? ""} onChange={(event) => setQuantities((previous) => ({ ...previous, [item.product.id]: event.target.value }))} /><div className="text-right text-sm tabular-nums">{item.gross.toLocaleString()}원</div><AppButton type="button" variant="ghost" size="icon" aria-label={`${item.product.name} 삭제`} onClick={() => { setQuantities((previous) => { const next = { ...previous }; delete next[item.product.id]; return next }); setUnitPrices((previous) => { const next = { ...previous }; delete next[item.product.id]; return next }); setItemOrder((previous) => previous.filter((id) => id !== item.product.id)) }}><Trash2 className="h-4 w-4" /></AppButton></div>)}</div></div>
+        <div className={items.length > 3 ? "flex min-h-0 flex-1 flex-col space-y-2" : "shrink-0 space-y-2"}><div className="shrink-0 text-sm font-medium">판매 제품 {items.length}종</div><div ref={productListRef} className={items.length > 3 ? "min-h-0 flex-1 max-h-[min(340px,32vh)] overflow-y-auto overflow-x-hidden pr-1" : "shrink-0"}>{items.length === 0 ? <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">아직 추가된 판매 제품이 없습니다.<br />위에서 제품과 수량을 선택해 추가해주세요.</div> : items.map((item) => <div key={item.product.id} className="mb-2 grid gap-2 rounded-lg border p-3 last:mb-0 sm:grid-cols-[1fr_110px_110px_120px_auto] sm:items-center"><div className="min-w-0"><div className="text-xs text-muted-foreground">{item.product.category?.trim() || "미분류"}</div><div className="truncate font-medium">{item.product.name}</div></div><AppInput aria-label={`${item.product.name} 판매 단가`} type="number" min="0" step="1" inputMode="numeric" value={unitPrices[item.product.id] ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setUnitPrices((previous) => ({ ...previous, [item.product.id]: event.target.value }))} /><AppInput aria-label={`${item.product.name} 판매 수량`} type="number" min="1" step="1" inputMode="numeric" value={quantities[item.product.id] ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantities((previous) => ({ ...previous, [item.product.id]: event.target.value }))} /><div className="text-right text-sm tabular-nums">{item.gross.toLocaleString()}원</div><AppButton type="button" variant="ghost" size="icon" aria-label={`${item.product.name} 삭제`} onClick={() => { setQuantities((previous) => { const next = { ...previous }; delete next[item.product.id]; return next }); setUnitPrices((previous) => { const next = { ...previous }; delete next[item.product.id]; return next }); setItemOrder((previous) => previous.filter((id) => id !== item.product.id)) }}><Trash2 className="h-4 w-4" /></AppButton></div>)}</div></div>
         <div className="shrink-0 flex flex-col gap-2 rounded-lg bg-muted p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span>판매 제품 {items.length}종 · 총 판매수량 {totalQuantity}개</span><div className="grid gap-1 sm:min-w-[230px]"><div className="flex justify-between gap-4"><span>총매출</span><span className="font-semibold tabular-nums">{grossAmount.toLocaleString()}원</span></div>{commissionRate == null ? <div className="text-muted-foreground">{storeId ? "수수료율 미설정" : "입점처 선택 후 수수료를 계산합니다."}</div> : <><div className="flex justify-between gap-4 text-muted-foreground"><span>판매 수수료 {formatCommissionPercent(commissionRate * 100)}%</span><span className="tabular-nums">{commissionAmount?.toLocaleString()}원</span></div><div className="flex justify-between gap-4 border-t border-border/60 pt-1 font-semibold text-primary"><span>정산 예정액</span><span className="tabular-nums">{expectedSettlement?.toLocaleString()}원</span></div></>}</div></div>
       </div>}
       <DialogFooter className="shrink-0">{draftPrompt ? null : confirming ? <><AppButton variant="outline" onClick={() => setConfirming(false)} disabled={saving}>이전</AppButton><AppButton onClick={save} disabled={saving}>{saving ? "정산 등록 중..." : "정산 등록"}</AppButton></> : <AppButton onClick={next} disabled={!items.length}>내용 확인</AppButton>}</DialogFooter>
     </DialogContent>
   </Dialog>
 }
-
 

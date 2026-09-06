@@ -87,10 +87,10 @@ function DashboardViewInner() {
     return need.size
   }, [inventory, targetQty])
 
-  // ===== 정산(성과) 요약: 이번달/전월/1위 채널 =====
+  // ===== 정산(성과) 요약: 지난달 판매월/직전월/1위 채널 =====
   const now = new Date()
-  const thisMonth = ym(now)
-  const prevMonth = ym(addMonths(now, -1))
+  const targetMonth = ym(addMonths(now, -1))
+  const comparisonMonth = ym(addMonths(now, -2))
 
   const settlementSummary = useMemo(() => {
     let thisTotal = 0
@@ -103,11 +103,11 @@ function DashboardViewInner() {
       const mid = String(s.marketplace_id ?? "")
       const gross = n((s as any).net_amount ?? 0)
 
-      if (pm === thisMonth) {
+      if (pm === targetMonth) {
         thisTotal += gross
         if (mid) byMarketplace.set(mid, (byMarketplace.get(mid) ?? 0) + gross)
       }
-      if (pm === prevMonth) prevTotal += gross
+      if (pm === comparisonMonth) prevTotal += gross
     }
 
     const ranked = Array.from(byMarketplace.entries())
@@ -130,7 +130,7 @@ function DashboardViewInner() {
       topTotal: top?.total ?? 0,
       delta,
     }
-  }, [settlementsV2, stores, thisMonth, prevMonth])
+  }, [settlementsV2, stores, targetMonth, comparisonMonth])
 
   if (loading) {
     return (
@@ -250,8 +250,8 @@ function DashboardViewInner() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <p className="text-sm font-medium">이번달 매출 요약</p>
-              <AppBadge variant="muted">{thisMonth}</AppBadge>
+              <p className="text-sm font-medium">지난달 매출 요약</p>
+              <AppBadge variant="muted">{targetMonth}</AppBadge>
             </div>
             <p className="text-xs text-muted-foreground">
               정산 탭에서 채널별 매출/전월 대비를 더 자세히 확인할 수 있어요.
@@ -270,7 +270,7 @@ function DashboardViewInner() {
 
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border bg-background p-4">
-            <p className="text-xs text-muted-foreground">이번달 정산금액</p>
+            <p className="text-xs text-muted-foreground">지난달 정산금액</p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">{fmtKRW(settlementSummary.thisTotal)}원</p>
           </div>
 
@@ -281,7 +281,7 @@ function DashboardViewInner() {
               <AppBadge variant={deltaVariant}>{deltaLabel}</AppBadge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              지난달({prevMonth}): {fmtKRW(settlementSummary.prevTotal)}원
+              직전월({comparisonMonth}): {fmtKRW(settlementSummary.prevTotal)}원
             </p>
           </div>
 

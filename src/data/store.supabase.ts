@@ -97,6 +97,7 @@ type DBSettlement = {
   created_at: string
   updated_at: string
   apply_to_inventory: boolean
+  inventory_applied_at?: string | null
   settlement_type?: "detailed" | "summary"
 }
 
@@ -1214,7 +1215,7 @@ export async function listSettlementsDB(input: {
   let q = supabase
     .from("settlements_v2")
     .select(
-      "id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,settlement_type,source_filename,created_at,updated_at"
+      "id,user_id,marketplace_id,period_month,currency,gross_amount,commission_rate,commission_amount,net_amount,rows_count,status,apply_to_inventory,inventory_applied_at,settlement_type,source_filename,created_at,updated_at"
     )    
     .eq("user_id", userId)
     .order("period_month", { ascending: false })
@@ -1509,54 +1510,32 @@ export async function createManualSettlementDB(input: {
   if (!store || (products ?? []).length !== productIds.length) throw new Error("입점처 또는 제품 권한을 확인할 수 없습니다.")
   if (existing) throw new Error("DUPLICATE_SETTLEMENT")
 
-  const productsById = new Map((products ?? []).map((product) => [String(product.id), product]))
   const configuredRate = Number(setting?.commission_rate ?? 0)
   const commissionRate = configuredRate > 0 ? configuredRate : Number(store.commission_rate ?? 0) / 100
-  const lines = items.map((item) => {
-    const product = productsById.get(item.productId)
-    const unitPrice = item.unitPrice
-    if (!Number.isInteger(unitPrice) || !Number.isFinite(unitPrice) || unitPrice < 0) throw new Error("제품 판매가를 확인할 수 없습니다.")
-    const grossAmount = item.quantity * unitPrice
-    return {
-      productId: item.productId,
-      productNameRaw: String(product?.name ?? ""),
-      productNameMatched: String(product?.name ?? "") || null,
-      skuRaw: product?.sku ?? null,
-      qtySold: item.quantity,
-      unitPrice,
-      grossAmount,
-      matchStatus: "matched" as const,
-    }
-  })
-  const grossAmount = lines.reduce((sum, line) => sum + line.grossAmount, 0)
-  const commissionAmount = Math.round(grossAmount * commissionRate)
 
-  let settlementId = ""
-  try {
-    const settlement = await createSettlementHeaderDB({
-      marketplaceId: input.marketplaceId,
-      periodMonth: month,
-      currency: "KRW",
-      grossAmount,
-      commissionRate,
-      commissionAmount,
-      netAmount: grossAmount - commissionAmount,
-      rowsCount: lines.length,
-      sourceFilename: null,
-      applyToInventory: false,
-      settlementType: "detailed",
-    })
-    settlementId = settlement.id
-    await replaceSettlementLinesDB({ settlementId, marketplaceId: input.marketplaceId, lines })
-    await recomputeSettlementProductStatsDB({ marketplaceId: input.marketplaceId, periodMonth: month })
-    return settlementId
-  } catch (error) {
-    if (settlementId) {
-      await supabase.from("settlement_lines_v2").delete().eq("user_id", userId).eq("settlement_id", settlementId)
-      await supabase.from("settlements_v2").delete().eq("user_id", userId).eq("id", settlementId)
-    }
-    throw error
-  }
+  const { data, error } = await supabase.rpc("create_manual_settlement_with_inventory", {
+    p_marketplace_id: input.marketplaceId,
+    p_period_month: month,
+    p_commission_rate: commissionRate,
+    p_items: items,
+  })
+  if (error) throw error
+  const settlementId = String((data as any)?.settlement_id ?? "")
+  if (!settlementId) throw new Error("정산 생성 결과가 없습니다.")
+  await recomputeSettlementProductStatsDB({ marketplaceId: input.marketplaceId, periodMonth: month })
+  return { settlementId, shortages: (data as any)?.shortages ?? [] }
+}
+
+export async function applyManualSettlementInventoryDB(input: { settlementId: string }) {
+  const { data, error } = await supabase.rpc("apply_manual_settlement_inventory", { p_settlement_id: input.settlementId })
+  if (error) throw error
+  return data as { already_applied: boolean; shortages: Array<{ product_id: string; before_qty: number; sold_qty: number; shortage_qty: number }> }
+}
+
+export async function deleteManualSettlementDB(input: { settlementId: string }) {
+  const { data, error } = await supabase.rpc("delete_manual_settlement", { p_settlement_id: input.settlementId })
+  if (error) throw error
+  return data as { inventory_restored: boolean }
 }
 
 export async function replaceSettlementLinesDB(input: {

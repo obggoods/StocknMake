@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { AppButton } from "@/components/app/AppButton"
+import { useState } from "react"
 
 export type AppSelectOption = { value: string; label: string }
 
@@ -15,9 +16,10 @@ export function AppSelect(props: {
   className?: string
 }) {
   const { value, onValueChange, options, placeholder = "선택", disabled, className } = props
+  const [open, setOpen] = useState(false)
   const selected = options.find((option) => option.value === value)
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <AppButton type="button" variant="outline" disabled={disabled} className={cn("h-8 w-full min-w-[120px] justify-between px-3 text-left font-normal", className)}>
           <span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
@@ -28,7 +30,7 @@ export function AppSelect(props: {
         <Command>
           <CommandInput placeholder={`${placeholder} 검색...`} />
           <CommandList><CommandEmpty>선택지가 없습니다.</CommandEmpty><CommandGroup>
-            {options.map((option) => <CommandItem key={option.value || "__empty"} value={option.label} onSelect={() => onValueChange(option.value)}>
+            {options.map((option) => <CommandItem key={option.value || "__empty"} value={option.label} onSelect={() => { onValueChange(option.value); setOpen(false) }}>
               <Check className={cn("mr-2 h-4 w-4", option.value === value ? "opacity-100" : "opacity-0")} />
               <span className="truncate">{option.label}</span>
             </CommandItem>)}

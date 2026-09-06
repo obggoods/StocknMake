@@ -21,6 +21,8 @@ import {
   listSettlementsDB,
   getSettlementDetailDB,
   deleteSettlementV2DB,
+  deleteManualSettlementDB,
+  applyManualSettlementInventoryDB,
   listSettlementLinesV2DB,
   upsertInventoryItemDB,
   recomputeSettlementProductStatsDB,
@@ -97,11 +99,14 @@ export default function SettlementsPage() {
   const [detail, setDetail] = useState<{ settlement: any; lines: any[] } | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [inventoryBusy, setInventoryBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string
     storeId: string
     month: string
     applyToInventory: boolean
+    manual: boolean
+    inventoryAppliedAt: string | null
   } | null>(null)
   const [restoreOnDelete, setRestoreOnDelete] = useState(true)
   const [costPickerOpen, setCostPickerOpen] = useState(false)
@@ -401,7 +406,11 @@ export default function SettlementsPage() {
           }
         }
 
-        await deleteSettlementV2DB({ settlementId: deletingId })
+        if (target.manual) {
+          await deleteManualSettlementDB({ settlementId: deletingId })
+        } else {
+          await deleteSettlementV2DB({ settlementId: deletingId })
+        }
 
         await recomputeSettlementProductStatsDB({
           marketplaceId: target.storeId,
@@ -461,7 +470,7 @@ export default function SettlementsPage() {
         onOpenChange={setManualSettlementOpen}
         stores={stores}
         products={(a.data.products ?? []) as Array<{ id: string; name: string; category?: string | null; price?: number | null; sku?: string | null; barcode?: string | null; active?: boolean }>}
-        inventory={(a.data.inventory ?? []) as Array<{ storeId: string; productId: string }>}
+        storeProductStates={(a.data.storeProductStates ?? []) as Array<{ storeId: string; productId: string; enabled: boolean }>}
         onSaved={handleSettlementSaved}
       />
 
@@ -541,12 +550,12 @@ export default function SettlementsPage() {
                     <div className="inline-flex items-center justify-end gap-2">
                       <span
                         className={
-                          s.apply_to_inventory
+                          s.inventory_applied_at || s.apply_to_inventory
                             ? "inline-flex items-center rounded-md border px-2 py-1 text-[11px] text-foreground"
                             : "inline-flex items-center rounded-md border px-2 py-1 text-[11px] text-muted-foreground"
                         }
                       >
-                        {s.apply_to_inventory ? "재고반영" : "미반영"}
+                        {s.inventory_applied_at || s.apply_to_inventory ? "재고반영" : "미반영"}
                       </span>
 
                       <AppButton
@@ -562,8 +571,10 @@ export default function SettlementsPage() {
                             storeId: s.marketplace_id,
                             month: s.period_month,
                             applyToInventory: Boolean(s.apply_to_inventory),
+                            manual: s.settlement_type === "detailed" && !s.source_filename,
+                            inventoryAppliedAt: s.inventory_applied_at ?? null,
                           })
-                          setRestoreOnDelete(Boolean(s.apply_to_inventory))
+                            setRestoreOnDelete(Boolean(s.apply_to_inventory || s.inventory_applied_at))
                           setDeleteOpen(true)
                         }}
                       >
@@ -587,7 +598,7 @@ export default function SettlementsPage() {
 
         {detail ? (
           <div className="mt-4 space-y-2">
-            <div className="text-sm font-medium">정산 상세</div>
+            <div className="flex items-center justify-between gap-3"><div className="text-sm font-medium">정산 상세</div>{detail.settlement?.settlement_type === "detailed" && !detail.settlement?.source_filename ? <AppButton type="button" variant="outline" size="sm" disabled={inventoryBusy || Boolean(detail.settlement?.inventory_applied_at)} onClick={async () => { if (detail.settlement?.inventory_applied_at) return; if (!window.confirm("이 정산의 판매 수량을 해당 입점처 재고에 반영하시겠습니까?\n\n제품별 판매 수량만큼 해당 입점처 재고가 차감됩니다.")) return; setInventoryBusy(true); try { const result = await applyManualSettlementInventoryDB({ settlementId: detail.settlement.id }); if (result.shortages.length) toast.message("일부 제품의 판매 수량이 재고보다 많아 재고가 0으로 조정되었습니다."); toast.success("재고 반영 완료"); await load(); await openDetail(detail.settlement.id) } catch (e: any) { toast.error(`재고 반영 실패: ${e?.message ?? String(e)}`) } finally { setInventoryBusy(false) } }}>{inventoryBusy ? "반영 중..." : detail.settlement?.inventory_applied_at ? "재고 반영 완료" : "재고 반영"}</AppButton> : null}</div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <AppCard title="총원가">
                 <div className="text-lg font-semibold">
@@ -746,19 +757,27 @@ export default function SettlementsPage() {
                   : "정산 데이터를 삭제합니다."}
               </div>
 
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4"
-                  checked={restoreOnDelete}
-                  disabled={!deleteTarget?.applyToInventory}
-                  onChange={(e) => setRestoreOnDelete(e.target.checked)}
-                />
-                <span className={deleteTarget?.applyToInventory ? "" : "text-muted-foreground"}>
-                  삭제 시 재고도 복원하기
-                  {!deleteTarget?.applyToInventory ? " (이 정산은 재고차감 미적용)" : ""}
-                </span>
-              </label>
+              {deleteTarget?.manual ? (
+                <div className="text-sm text-muted-foreground">
+                  {deleteTarget.inventoryAppliedAt
+                    ? "삭제 시 판매 수량만큼 해당 입점처 재고가 자동으로 복원됩니다."
+                    : "이 정산은 재고에 반영되지 않았으므로 삭제 시 재고는 변경되지 않습니다."}
+                </div>
+              ) : (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={restoreOnDelete}
+                    disabled={!deleteTarget?.applyToInventory}
+                    onChange={(e) => setRestoreOnDelete(e.target.checked)}
+                  />
+                  <span className={deleteTarget?.applyToInventory ? "" : "text-muted-foreground"}>
+                    삭제 시 재고도 복원하기
+                    {!deleteTarget?.applyToInventory ? " (이 정산은 재고차감 미적용)" : ""}
+                  </span>
+                </label>
+              )}
             </div>
           }
           confirmText="삭제"
@@ -1158,3 +1177,4 @@ function TopProductsMiniCard(props: {
 
   )
 }
+
