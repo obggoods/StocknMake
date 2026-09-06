@@ -1476,7 +1476,7 @@ export async function createSettlementHeaderDB(input: {
 export async function createManualSettlementDB(input: {
   marketplaceId: string
   periodMonth: string
-  items: Array<{ productId: string; quantity: number }>
+  items: Array<{ productId: string; quantity: number; unitPrice: number }>
 }) {
   const userId = await requireUserId()
   const month = String(input.periodMonth ?? "")
@@ -1484,6 +1484,9 @@ export async function createManualSettlementDB(input: {
     (item) =>
       Number.isInteger(item.quantity) &&
       item.quantity > 0 &&
+      Number.isInteger(item.unitPrice) &&
+      Number.isFinite(item.unitPrice) &&
+      item.unitPrice >= 0 &&
       Boolean(item.productId)
   )
 
@@ -1511,8 +1514,8 @@ export async function createManualSettlementDB(input: {
   const commissionRate = configuredRate > 0 ? configuredRate : Number(store.commission_rate ?? 0) / 100
   const lines = items.map((item) => {
     const product = productsById.get(item.productId)
-    const unitPrice = Number(product?.price ?? 0)
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error("제품 판매가를 확인할 수 없습니다.")
+    const unitPrice = item.unitPrice
+    if (!Number.isInteger(unitPrice) || !Number.isFinite(unitPrice) || unitPrice < 0) throw new Error("제품 판매가를 확인할 수 없습니다.")
     const grossAmount = item.quantity * unitPrice
     return {
       productId: item.productId,
