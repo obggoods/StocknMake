@@ -471,7 +471,7 @@ export default function SettlementsPage() {
         title="저장된 정산(v2)"
         description="월/입점처별로 저장된 정산을 확인할 수 있어요."
         action={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center justify-end gap-2">
             {/* Year */}
             <AppSelect
               value={selectedYear}
@@ -481,7 +481,7 @@ export default function SettlementsPage() {
                 setMonth(`${nextYear}-${nextMonth}`)
               }}
               options={yearOptions(6).map((y) => ({ value: y, label: `${y}년` }))}
-              className="h-9"
+              className="h-9 w-full sm:w-[120px]"
             />
 
             {/* Month */}
@@ -491,17 +491,17 @@ export default function SettlementsPage() {
                 setMonth(`${selectedYear}-${nextMm}`)
               }}
               options={monthNumOptions(Number(selectedYear))}
-              className="h-9"
+              className="h-9 w-full sm:w-[100px]"
             />
 
             <AppSelect
               value={storeId}
               onValueChange={setStoreId}
               options={[{ value: "", label: "전체 입점처" }, ...stores.map((s: any) => ({ value: String(s.id), label: String(s.name) }))]}
-              className="h-9"
+              className="h-9 w-full sm:w-[220px]"
             />
 
-            <AppButton type="button" variant="outline" onClick={handleSettlementSaved} disabled={loading}>
+            <AppButton type="button" variant="outline" className="h-9 w-full sm:w-auto" onClick={handleSettlementSaved} disabled={loading}>
               새로고침
             </AppButton>
           </div>
