@@ -405,7 +405,7 @@ export default function MarginCalculatorPage(props?: {
 
           const { data: storeData } = await supabase
             .from("stores")
-            .select("id, name, commission_rate, store_fee, monthly_rent_fee, include_monthly_rent_in_margin")
+            .select("id, name, commission_rate")
 
           setProducts(productData ?? [])
           setStores(storeData ?? [])
