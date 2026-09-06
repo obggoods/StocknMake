@@ -48,7 +48,16 @@ function parseUnitPrice(value: string) {
 type SettlementDraft = { savedAt: number; marketplaceId: string; periodMonth: string; products: Array<{ productId: string; quantity: string; unitPrice: string }> }
 const draftKey = (userId: string) => `stocknmake:manual-settlement-draft:${userId}`
 
-function keepDropdownWheelInside(event: WheelEvent<HTMLDivElement>) {`r`n  const list = event.currentTarget`r`n  if (list.scrollHeight <= list.clientHeight) return`r`n  const nextTop = Math.max(0, Math.min(list.scrollHeight - list.clientHeight, list.scrollTop + event.deltaY))`r`n  if (nextTop !== list.scrollTop) {`r`n    event.preventDefault()`r`n    event.stopPropagation()`r`n    list.scrollTop = nextTop`r`n  }`r`n}
+function keepDropdownWheelInside(event: WheelEvent<HTMLDivElement>) {
+  const list = event.currentTarget
+  if (list.scrollHeight <= list.clientHeight) return
+  const nextTop = Math.max(0, Math.min(list.scrollHeight - list.clientHeight, list.scrollTop + event.deltaY))
+  if (nextTop !== list.scrollTop) {
+    event.preventDefault()
+    event.stopPropagation()
+    list.scrollTop = nextTop
+  }
+}
 
 export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; stores: Store[]; products: Product[]; inventory: Inventory[]; onSaved: () => Promise<void> }) {
   const [storeId, setStoreId] = useState("")
@@ -204,4 +213,5 @@ export function ManualSettlementDialog(props: { open: boolean; onOpenChange: (op
     </DialogContent>
   </Dialog>
 }
+
 
