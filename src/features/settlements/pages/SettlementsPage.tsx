@@ -9,6 +9,7 @@ import MarketplacePerformance from "@/features/dashboard/components/MarketplaceP
 import { AppCard } from "@/components/app/AppCard"
 import { AppButton } from "@/components/app/AppButton"
 import { AppBadge } from "@/components/app/AppBadge"
+import { AppSelect } from "@/components/app/AppSelect"
 
 import { EmptyState } from "@/components/shared/EmptyState"
 import { Skeleton } from "@/components/shared/Skeleton"
@@ -48,11 +49,15 @@ function monthOptions(n = 24) {
 
 function yearOptions(range = 4) {
   const y = new Date().getFullYear()
-  return Array.from({ length: range + 1 }).map((_, i) => String(y - i))
+  const currentMonth = new Date().getMonth()
+  const start = currentMonth === 0 ? 1 : 0
+  return Array.from({ length: range + 1 - start }).map((_, i) => String(y - i - start))
 }
 
-function monthNumOptions() {
-  return Array.from({ length: 12 }).map((_, i) => {
+function monthNumOptions(year: number) {
+  const current = new Date()
+  const count = year === current.getFullYear() ? current.getMonth() : 12
+  return Array.from({ length: Math.max(0, count) }).map((_, i) => {
     const mm = String(i + 1).padStart(2, "0")
     return { value: mm, label: `${mm}월` }
   })
@@ -77,7 +82,7 @@ export default function SettlementsPage() {
 
   // 조회 필터
   const [month, setMonth] = useState(() => {
-    const d = new Date()
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1)
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
   })
   const { yy: selectedYear, mm: selectedMonthNum } = useMemo(() => splitYYYYMM(month), [month])
@@ -468,49 +473,33 @@ export default function SettlementsPage() {
         action={
           <div className="flex flex-wrap items-center gap-2">
             {/* Year */}
-            <select
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+            <AppSelect
               value={selectedYear}
-              onChange={(e) => {
-                const nextYear = e.target.value
-                setMonth(`${nextYear}-${selectedMonthNum}`)
+              onValueChange={(nextYear) => {
+                const options = monthNumOptions(Number(nextYear))
+                const nextMonth = options.some((option) => option.value === selectedMonthNum) ? selectedMonthNum : options.at(-1)?.value ?? "01"
+                setMonth(`${nextYear}-${nextMonth}`)
               }}
-            >
-              {yearOptions(6).map((y) => (
-                <option key={y} value={y}>
-                  {y}년
-                </option>
-              ))}
-            </select>
+              options={yearOptions(6).map((y) => ({ value: y, label: `${y}년` }))}
+              className="h-9"
+            />
 
             {/* Month */}
-            <select
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+            <AppSelect
               value={selectedMonthNum}
-              onChange={(e) => {
-                const nextMm = e.target.value
+              onValueChange={(nextMm) => {
                 setMonth(`${selectedYear}-${nextMm}`)
               }}
-            >
-              {monthNumOptions().map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+              options={monthNumOptions(Number(selectedYear))}
+              className="h-9"
+            />
 
-            <select
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+            <AppSelect
               value={storeId}
-              onChange={(e) => setStoreId(e.target.value)}
-            >
-              <option value="">전체 입점처</option>
-              {stores.map((s: any) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onValueChange={setStoreId}
+              options={[{ value: "", label: "전체 입점처" }, ...stores.map((s: any) => ({ value: String(s.id), label: String(s.name) }))]}
+              className="h-9"
+            />
 
             <AppButton type="button" variant="outline" onClick={handleSettlementSaved} disabled={loading}>
               새로고침
