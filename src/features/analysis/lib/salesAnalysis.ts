@@ -25,16 +25,14 @@ function addMonths(month: string, offset: number) {
 }
 
 export function getAnalysisMonths(range: AnalysisRange, now = new Date()) {
-  const current = monthKey(now)
+  const lastCompletedMonth = addMonths(monthKey(now), -1)
 
   if (range === "year") {
-    return Array.from({ length: now.getMonth() + 1 }, (_, index) =>
-      monthKey(new Date(now.getFullYear(), index, 1))
-    )
+    return Array.from({ length: now.getMonth() }, (_, index) => monthKey(new Date(now.getFullYear(), index, 1)))
   }
 
   const count = range === "6m" ? 6 : 3
-  return Array.from({ length: count }, (_, index) => addMonths(current, index - count + 1))
+  return Array.from({ length: count }, (_, index) => addMonths(lastCompletedMonth, index - count + 1))
 }
 
 export function getPreviousAnalysisMonths(range: AnalysisRange, months: string[]) {
