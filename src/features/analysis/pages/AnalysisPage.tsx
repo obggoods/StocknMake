@@ -18,7 +18,6 @@ import { supabase } from "@/lib/supabaseClient"
 import {
   buildSalesAnalysis,
   getAnalysisMonths,
-  getSalesMonthFromSettlementMonth,
 } from "@/features/analysis/lib/salesAnalysis"
 import type {
   AnalysisLine,
@@ -59,10 +58,6 @@ function formatComparisonMonth(month: string, includeYear: boolean) {
   return includeYear ? formatYearMonth(month) : formatMonth(month)
 }
 
-function getSalesMonthLabelMonth(settlementMonth: string) {
-  return getSalesMonthFromSettlementMonth(settlementMonth)
-}
-
 function getComparisonMonthLabels(months: string[]) {
   if (months.length < 2) {
     return {
@@ -73,13 +68,11 @@ function getComparisonMonthLabels(months: string[]) {
 
   const previousMonth = months[months.length - 2]
   const currentMonth = months[months.length - 1]
-  const previousSalesMonth = getSalesMonthLabelMonth(previousMonth)
-  const currentSalesMonth = getSalesMonthLabelMonth(currentMonth)
-  const includeYear = previousSalesMonth.split("-")[0] !== currentSalesMonth.split("-")[0]
+  const includeYear = previousMonth.split("-")[0] !== currentMonth.split("-")[0]
 
   return {
-    previousMonthLabel: formatComparisonMonth(previousSalesMonth, includeYear),
-    currentMonthLabel: formatComparisonMonth(currentSalesMonth, includeYear),
+    previousMonthLabel: formatComparisonMonth(previousMonth, includeYear),
+    currentMonthLabel: formatComparisonMonth(currentMonth, includeYear),
   }
 }
 
@@ -433,7 +426,7 @@ function StoreSalesTrendsCard({ stores }: { stores: StoreSalesTrendSummary[] }) 
                           className="flex items-center justify-between gap-3 text-sm"
                         >
                           <span className="shrink-0 text-muted-foreground">
-                            {formatMonth(getSalesMonthLabelMonth(month.month))}
+                            {formatMonth(month.month)}
                           </span>
                           <span className="whitespace-nowrap text-right font-medium tabular-nums">
                             {formatKRW(month.amount)}{" "}
@@ -492,7 +485,7 @@ function StoreSalesDetailDialog(props: {
                     {store.monthly.map((month) => (
                       <div key={month.month} className="rounded-lg border p-3">
                         <div className="text-sm text-muted-foreground">
-                          {formatMonth(getSalesMonthLabelMonth(month.month))}
+                          {formatMonth(month.month)}
                         </div>
                         <div className="mt-1 whitespace-nowrap text-base font-semibold tabular-nums">
                           {formatKRW(month.amount)}
@@ -928,7 +921,7 @@ function TrendProductsCard({ products }: { products: ProductSalesSummary[] }) {
                           className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1 text-xs sm:grid-cols-[2.5rem_minmax(0,1fr)_8.75rem]"
                         >
                           <span className="shrink-0 font-medium">
-                            {formatMonth(getSalesMonthLabelMonth(month.month))}
+                            {formatMonth(month.month)}
                           </span>
 
                           <div className="h-2 min-w-0 overflow-hidden rounded-full bg-muted">

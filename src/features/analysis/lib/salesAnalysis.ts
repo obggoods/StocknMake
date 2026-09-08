@@ -24,10 +24,6 @@ function addMonths(month: string, offset: number) {
   return monthKey(date)
 }
 
-export function getSalesMonthFromSettlementMonth(month: string) {
-  return addMonths(month, -1)
-}
-
 export function getAnalysisMonths(range: AnalysisRange, now = new Date()) {
   const current = monthKey(now)
 
