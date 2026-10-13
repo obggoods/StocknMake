@@ -114,6 +114,11 @@ export default function SettlementsPage() {
   const [createProfileOpen, setCreateProfileOpen] = useState(false)
   const [manualSettlementOpen, setManualSettlementOpen] = useState(false)
   const stores = (a.data.stores ?? []) as any[]
+  const activeStores = useMemo(() => stores.filter((s) => s.status !== "inactive"), [stores])
+
+  useEffect(() => {
+    if (storeId && !activeStores.some((s) => String(s.id) === storeId)) setStoreId("")
+  }, [activeStores, storeId])
 
   const storeNameById = useMemo(() => {
     const m = new Map<string, string>()
@@ -506,7 +511,7 @@ export default function SettlementsPage() {
             <AppSelect
               value={storeId}
               onValueChange={setStoreId}
-              options={[{ value: "", label: "전체 입점처" }, ...stores.map((s: any) => ({ value: String(s.id), label: String(s.name) }))]}
+              options={[{ value: "", label: "전체 입점처" }, ...activeStores.map((s: any) => ({ value: String(s.id), label: String(s.name) }))]}
               className="h-9 w-full sm:w-[220px]"
             />
 
